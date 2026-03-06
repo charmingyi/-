@@ -114,6 +114,12 @@ logs_agent() {
 }
 
 menu() {
+  local input_dev
+  input_dev="/dev/tty"
+  if [ ! -r "$input_dev" ]; then
+    input_dev="/dev/stdin"
+  fi
+
   while true; do
     cat <<EOF
 
@@ -125,7 +131,7 @@ menu() {
 5) Logs
 0) Exit
 EOF
-    read -rp "Select: " c
+    read -r -p "Select: " c < "$input_dev" || exit 0
     case "$c" in
       1) install_agent ;;
       2) update_agent ;;
@@ -148,4 +154,3 @@ case "$cmd" in
   menu) menu ;;
   *) echo "Usage: [menu|install|update|uninstall|status|logs]"; exit 1 ;;
 esac
-
