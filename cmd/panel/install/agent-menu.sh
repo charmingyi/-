@@ -46,9 +46,12 @@ download_bin() {
   fi
 
   local url="${PANEL_URL%/}/downloads/agent-linux-${arch}"
+  local tmp_bin
+  tmp_bin="$(mktemp)"
   echo "Downloading: $url"
-  curl -fsSL "$url" -o "$BIN_PATH"
-  chmod +x "$BIN_PATH"
+  curl -fsSL "$url" -o "$tmp_bin"
+  install -m 0755 "$tmp_bin" "$BIN_PATH"
+  rm -f "$tmp_bin"
 }
 
 write_env() {
