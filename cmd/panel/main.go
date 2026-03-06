@@ -6,11 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"crypto/x509"
 	"io"
 	"log"
-	"crypto/x509"
-	"net/url"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -520,25 +520,94 @@ func probeEmby(baseURL, mode, caCertPEM string) (bool, string) {
 		Timeout:   12 * time.Second,
 		Transport: transportForTLSMode(mode, caCertPEM),
 	}
-	paths := []string{"/emby/System/Info/Public", "/System/Info/Public", "/web/index.html", "/"}
-	for _, p := range paths {
-		u := strings.TrimRight(baseURL, "/") + p
-		req, _ := http.NewRequest(http.MethodGet, u, nil)
-		resp, err := client.Do(req)
+	targets, err := probeTargets(baseURL)
+	if err != nil {
+		return false, err.Error()
+	}
+	for _, u := range targets {
+		resp, err := client.Get(u)
 		if err != nil {
 			continue
 		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if ok, reason := detectEmbyResponse(resp); ok {
+			resp.Body.Close()
+			return true, reason
+		}
 		resp.Body.Close()
-		bs := strings.ToLower(string(body))
-		ct := strings.ToLower(resp.Header.Get("Content-Type"))
-		if strings.Contains(ct, "application/json") && strings.Contains(bs, "servername") {
-			return true, "Emby API detected"
-		}
-		if strings.Contains(bs, "emby") && strings.Contains(bs, "web/index") {
-			return true, "Emby web detected"
-		}
 	}
 	return false, "No Emby signature found on tested endpoints"
+}
+
+func probeTargets(baseURL string) ([]string, error) {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return nil, fmt.Errorf("invalid upstream url")
+	}
+	basePath := strings.TrimRight(u.Path, "/")
+	candidates := []string{basePath}
+	switch {
+	case basePath == "", basePath == "/":
+		candidates = append(candidates, "/emby/System/Info/Public", "/System/Info/Public", "/web", "/web/index.html", "/")
+	case strings.HasSuffix(basePath, "/web"):
+		candidates = append(candidates, basePath+"/index.html", basePath+"/#!/startup/login.html", "/System/Info/Public", "/emby/System/Info/Public")
+	case strings.HasSuffix(basePath, "/emby"):
+		candidates = append(candidates, basePath+"/System/Info/Public", "/System/Info/Public", basePath+"/web/index.html")
+	default:
+		candidates = append(candidates, basePath+"/System/Info/Public", basePath+"/web", basePath+"/web/index.html", "/System/Info/Public")
+	}
+
+	seen := map[string]bool{}
+	targets := make([]string, 0, len(candidates))
+	for _, p := range candidates {
+		if p == "" {
+			p = "/"
+		}
+		candidate := *u
+		candidate.Path = p
+		candidate.RawQuery = ""
+		candidate.Fragment = ""
+		raw := candidate.String()
+		if !seen[raw] {
+			seen[raw] = true
+			targets = append(targets, raw)
+		}
+	}
+	return targets, nil
+}
+
+func detectEmbyResponse(resp *http.Response) (bool, string) {
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	server := strings.ToLower(resp.Header.Get("Server"))
+	location := strings.ToLower(resp.Header.Get("Location"))
+	if strings.Contains(server, "emby") || strings.Contains(location, "/web/index.html") {
+		return true, "Emby response headers detected"
+	}
+	if strings.Contains(ct, "application/json") {
+		var payload map[string]any
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&payload); err == nil {
+			if _, ok := payload["ServerName"]; ok {
+				return true, "Emby API detected"
+			}
+			if _, ok := payload["Version"]; ok {
+				return true, "Emby API detected"
+			}
+		}
+		return false, ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	if err != nil {
+		return false, ""
+	}
+	bs := strings.ToLower(string(body))
+	switch {
+	case strings.Contains(bs, "emby"):
+		return true, "Emby web detected"
+	case strings.Contains(bs, "manuallogin.html"):
+		return true, "Emby login page detected"
+	case strings.Contains(bs, "serverid=") && strings.Contains(bs, "startup"):
+		return true, "Emby startup page detected"
+	default:
+		return false, ""
+	}
 }
 
