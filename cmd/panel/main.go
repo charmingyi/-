@@ -1,0 +1,273 @@
+package main
+
+import (
+    "embed"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "path"
+    "strings"
+
+    "emby-proxy-hub/internal/panel"
+)
+
+//go:embed web/*
+var webFS embed.FS
+
+//go:embed install/agent-menu.sh
+var installScript string
+
+type server struct {
+    store      *panel.Store
+    adminToken string
+    panelURL   string
+}
+
+func main() {
+    listen := getEnv("PANEL_LISTEN", ":18473")
+    dataFile := getEnv("PANEL_DATA", "./data/panel.json")
+
+    st, err := panel.NewStore(dataFile)
+    if err != nil {
+        log.Fatalf("load store: %v", err)
+    }
+
+    s := &server{
+        store:      st,
+        adminToken: strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
+        panelURL:   strings.TrimRight(getEnv("PANEL_PUBLIC_URL", "http://127.0.0.1:18473"), "/"),
+    }
+
+    mux := http.NewServeMux()
+    mux.HandleFunc("/", s.handleIndex)
+    mux.HandleFunc("/api/state", s.auth(s.handleState))
+    mux.HandleFunc("/api/agents", s.auth(s.handleAgents))
+    mux.HandleFunc("/api/agents/", s.auth(s.handleAgentByID))
+    mux.HandleFunc("/api/upstreams", s.auth(s.handleUpstreams))
+    mux.HandleFunc("/api/upstreams/", s.auth(s.handleUpstreamByID))
+    mux.HandleFunc("/api/routes", s.auth(s.handleRoutes))
+    mux.HandleFunc("/api/routes/", s.auth(s.handleRouteByID))
+    mux.HandleFunc("/api/agent/install-command", s.auth(s.handleAgentInstallCommand))
+    mux.HandleFunc("/api/agent/config", s.handleAgentConfig)
+    mux.HandleFunc("/install/agent-menu.sh", s.handleInstallScript)
+    mux.Handle("/downloads/", http.StripPrefix("/downloads/", http.FileServer(http.Dir("./releases"))))
+    mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(webFS))))
+
+    log.Printf("panel listening on %s", listen)
+    if err := http.ListenAndServe(listen, logReq(mux)); err != nil {
+        log.Fatal(err)
+    }
+}
+
+func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
+    if r.URL.Path != "/" {
+        http.NotFound(w, r)
+        return
+    }
+    b, err := webFS.ReadFile("web/index.html")
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+    w.Header().Set("Content-Type", "text/html; charset=utf-8")
+    _, _ = w.Write(b)
+}
+
+func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
+    writeJSON(w, http.StatusOK, s.store.Snapshot())
+}
+
+func (s *server) handleAgents(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w)
+        return
+    }
+    var in struct {
+        Name string `json:"name"`
+        Host string `json:"host"`
+    }
+    if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+        writeErr(w, http.StatusBadRequest, err)
+        return
+    }
+    a, err := s.store.AddAgent(in.Name, in.Host)
+    if err != nil {
+        writeErr(w, http.StatusBadRequest, err)
+        return
+    }
+    writeJSON(w, http.StatusOK, a)
+}
+
+func (s *server) handleAgentByID(w http.ResponseWriter, r *http.Request) {
+    id := path.Base(r.URL.Path)
+    if strings.HasSuffix(r.URL.Path, "/reset-token") {
+        id = path.Base(path.Dir(r.URL.Path))
+        if r.Method != http.MethodPost {
+            methodNotAllowed(w)
+            return
+        }
+        a, err := s.store.ResetAgentToken(id)
+        if err != nil {
+            writeErr(w, http.StatusBadRequest, err)
+            return
+        }
+        writeJSON(w, http.StatusOK, a)
+        return
+    }
+
+    if r.Method != http.MethodDelete {
+        methodNotAllowed(w)
+        return
+    }
+    if err := s.store.DeleteAgent(id); err != nil {
+        writeErr(w, http.StatusBadRequest, err)
+        return
+    }
+    writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w)
+        return
+    }
+    var in struct {
+        Name    string `json:"name"`
+        BaseURL string `json:"base_url"`
+    }
+    if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+        writeErr(w, http.StatusBadRequest, err)
+        return
+    }
+    u, err := s.store.AddUpstream(in.Name, in.BaseURL)
+    if err != nil {
+        writeErr(w, http.StatusBadRequest, err)
+        return
+    }
+    writeJSON(w, http.StatusOK, u)
+}
+
+func (s *server) handleUpstreamByID(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodDelete {
+        methodNotAllowed(w)
+        return
+    }
+    id := path.Base(r.URL.Path)
+    if err := s.store.DeleteUpstream(id); err != nil {
+        writeErr(w, http.StatusBadRequest, err)
+        return
+    }
+    writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) handleRoutes(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        methodNotAllowed(w)
+        return
+    }
+    var in struct {
+        Name       string `json:"name"`
+        PathPrefix string `json:"path_prefix"`
+        AgentID    string `json:"agent_id"`
+        UpstreamID string `json:"upstream_id"`
+    }
+    if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+        writeErr(w, http.StatusBadRequest, err)
+        return
+    }
+    route, err := s.store.AddRoute(in.Name, in.PathPrefix, in.AgentID, in.UpstreamID)
+    if err != nil {
+        writeErr(w, http.StatusBadRequest, err)
+        return
+    }
+    writeJSON(w, http.StatusOK, route)
+}
+
+func (s *server) handleRouteByID(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodDelete {
+        methodNotAllowed(w)
+        return
+    }
+    id := path.Base(r.URL.Path)
+    if err := s.store.DeleteRoute(id); err != nil {
+        writeErr(w, http.StatusBadRequest, err)
+        return
+    }
+    writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
+    agentID := r.URL.Query().Get("agent_id")
+    token := r.URL.Query().Get("token")
+    cfg, err := s.store.AgentConfig(agentID, token)
+    if err != nil {
+        writeErr(w, http.StatusUnauthorized, err)
+        return
+    }
+    writeJSON(w, http.StatusOK, map[string]any{
+        "agent_id": agentID,
+        "routes":   cfg,
+    })
+}
+
+func (s *server) handleAgentInstallCommand(w http.ResponseWriter, r *http.Request) {
+    agentID := r.URL.Query().Get("id")
+    a, ok := s.store.GetAgent(agentID)
+    if !ok {
+        writeErr(w, http.StatusNotFound, fmt.Errorf("agent not found"))
+        return
+    }
+    cmd := fmt.Sprintf("curl -fsSL %s/install/agent-menu.sh | sudo env PANEL_URL='%s' AGENT_ID='%s' AGENT_TOKEN='%s' bash -s -- menu", s.panelURL, s.panelURL, a.ID, a.Token)
+    writeJSON(w, http.StatusOK, map[string]string{"command": cmd})
+}
+
+func (s *server) handleInstallScript(w http.ResponseWriter, _ *http.Request) {
+    w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+    _, _ = w.Write([]byte(installScript))
+}
+
+func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        if s.adminToken == "" {
+            next(w, r)
+            return
+        }
+        if r.Header.Get("X-Admin-Token") != s.adminToken {
+            writeErr(w, http.StatusUnauthorized, fmt.Errorf("unauthorized"))
+            return
+        }
+        next(w, r)
+    }
+}
+
+func writeJSON(w http.ResponseWriter, status int, data any) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(status)
+    _ = json.NewEncoder(w).Encode(data)
+}
+
+func writeErr(w http.ResponseWriter, status int, err error) {
+    writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func methodNotAllowed(w http.ResponseWriter) {
+    writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+}
+
+func logReq(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        log.Printf("%s %s", r.Method, r.URL.Path)
+        next.ServeHTTP(w, r)
+    })
+}
+
+func getEnv(k, d string) string {
+    v := strings.TrimSpace(os.Getenv(k))
+    if v == "" {
+        return d
+    }
+    return v
+}
+

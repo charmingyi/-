@@ -1,0 +1,91 @@
+:root {
+  --bg: #f3efe6;
+  --card: #fffdfa;
+  --ink: #1d2228;
+  --muted: #5f6874;
+  --primary: #0f766e;
+  --primary2: #1d4ed8;
+  --danger: #c2410c;
+  --line: #ddd3c2;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Manrope", "Noto Sans SC", sans-serif;
+  color: var(--ink);
+  background: radial-gradient(circle at 20% 20%, #f4d8a6 0%, transparent 35%),
+              radial-gradient(circle at 80% 15%, #c5e6ea 0%, transparent 30%),
+              var(--bg);
+  min-height: 100vh;
+}
+.container {
+  width: min(1150px, 94vw);
+  margin: 24px auto 50px;
+  position: relative;
+  z-index: 2;
+}
+.hero h1 { margin: 0; font-size: clamp(2rem, 3.5vw, 3rem); letter-spacing: 0.5px; }
+.hero p { margin: 8px 0 16px; color: var(--muted); }
+.token { display: flex; gap: 8px; }
+.grid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.card {
+  background: color-mix(in srgb, var(--card) 92%, white 8%);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 10px 20px rgba(20, 23, 28, 0.06);
+  padding: 16px;
+}
+.wide { grid-column: 1 / -1; }
+h2 { margin: 0 0 12px; font-size: 1.1rem; }
+form, .row2, .row3 { display: grid; gap: 8px; }
+.row2 { grid-template-columns: 1fr auto; }
+.row3 { grid-template-columns: 1fr 1fr 1fr 1fr auto; }
+input, select, button, textarea {
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  font: inherit;
+}
+button {
+  border: none;
+  background: linear-gradient(135deg, var(--primary), var(--primary2));
+  color: #fff;
+  cursor: pointer;
+}
+button.danger { background: var(--danger); }
+textarea { width: 100%; resize: vertical; }
+.list { margin-top: 10px; display: grid; gap: 8px; }
+.item {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 6px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+.item b { display: block; }
+.item small { color: var(--muted); }
+.bg-shape {
+  position: fixed;
+  width: 320px;
+  height: 320px;
+  border-radius: 50%;
+  filter: blur(80px);
+  z-index: 0;
+  opacity: .32;
+}
+.s1 { left: -100px; top: -80px; background: #f97316; }
+.s2 { right: -120px; bottom: -90px; background: #06b6d4; }
+@media (max-width: 980px) {
+  .grid { grid-template-columns: 1fr; }
+  .row3 { grid-template-columns: 1fr; }
+  .item { grid-template-columns: 1fr; }
+}
+

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_NAME="emby-panel"
+INSTALL_DIR="/opt/${APP_NAME}"
+BIN_PATH="/usr/local/bin/${APP_NAME}"
+ENV_PATH="/etc/${APP_NAME}.env"
+SERVICE_PATH="/etc/systemd/system/${APP_NAME}.service"
+
+REPO_OWNER="${REPO_OWNER:-charmingyi}"
+REPO_NAME="${REPO_NAME:--}"
+REPO_BRANCH="${REPO_BRANCH:-codex/create-reverse-proxy-website-for-emby-kzecse}"
+
+PANEL_LISTEN="${PANEL_LISTEN:-:18473}"
+PANEL_PUBLIC_URL="${PANEL_PUBLIC_URL:-}"
+ADMIN_TOKEN="${ADMIN_TOKEN:-}"
+
+need_root() {
+  if [ "${EUID}" -ne 0 ]; then
+    echo "Please run as root: sudo bash deploy.sh"
+    exit 1
+  fi
+}
+
+need_go() {
+  if ! command -v go >/dev/null 2>&1; then
+    echo "Go is required. Install Go 1.22+ first."
+    exit 1
+  fi
+}
+
+download_source() {
+  local tmp_dir archive_url
+  tmp_dir="$(mktemp -d)"
+  archive_url="https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/refs/heads/${REPO_BRANCH}"
+
+  echo "Downloading source: ${archive_url}"
+  curl -fL -s "${archive_url}" -o "${tmp_dir}/src.tar.gz"
+  tar -xzf "${tmp_dir}/src.tar.gz" -C "${tmp_dir}"
+
+  SRC_DIR="$(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  if [ -z "${SRC_DIR}" ] || [ ! -f "${SRC_DIR}/go.mod" ]; then
+    echo "Invalid source archive. Check REPO_OWNER/REPO_NAME/REPO_BRANCH"
+    exit 1
+  fi
+}
+
+build_panel() {
+  mkdir -p "${INSTALL_DIR}"
+  rm -rf "${INSTALL_DIR}/src"
+  cp -r "${SRC_DIR}" "${INSTALL_DIR}/src"
+  cd "${INSTALL_DIR}/src"
+  CGO_ENABLED=0 go build -o "${BIN_PATH}" ./cmd/panel
+}
+
+write_env() {
+  if [ -z "${PANEL_PUBLIC_URL}" ]; then
+    local host_ip
+    host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [ -z "${host_ip}" ]; then
+      host_ip="127.0.0.1"
+    fi
+    PANEL_PUBLIC_URL="http://${host_ip}${PANEL_LISTEN}"
+  fi
+
+  cat > "${ENV_PATH}" <<EOF
+PANEL_LISTEN=${PANEL_LISTEN}
+PANEL_PUBLIC_URL=${PANEL_PUBLIC_URL}
+ADMIN_TOKEN=${ADMIN_TOKEN}
+PANEL_DATA=${INSTALL_DIR}/data/panel.json
+EOF
+}
+
+write_service() {
+  cat > "${SERVICE_PATH}" <<EOF
+[Unit]
+Description=Emby Relay Hub Panel
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=${ENV_PATH}
+WorkingDirectory=${INSTALL_DIR}/src
+ExecStart=${BIN_PATH}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+main() {
+  need_root
+  need_go
+  download_source
+  build_panel
+  mkdir -p "${INSTALL_DIR}/data"
+  write_env
+  write_service
+  systemctl daemon-reload
+  systemctl enable --now "${APP_NAME}"
+  echo "Panel installed and running: ${PANEL_PUBLIC_URL}"
+}
+
+main "$@"

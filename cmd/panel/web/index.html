@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Emby Relay Hub</title>
+  <link rel="stylesheet" href="/static/web/style.css" />
+</head>
+<body>
+  <div class="bg-shape s1"></div>
+  <div class="bg-shape s2"></div>
+  <main class="container">
+    <header class="hero">
+      <h1>Emby Relay Hub</h1>
+      <p>多 Agent 优化中转控制台</p>
+      <div class="token">
+        <input id="adminToken" placeholder="可选: ADMIN_TOKEN" />
+        <button id="saveToken">保存令牌</button>
+      </div>
+    </header>
+
+    <section class="grid">
+      <article class="card">
+        <h2>添加 Agent</h2>
+        <form id="agentForm">
+          <input name="name" placeholder="Agent 名称" required />
+          <input name="host" placeholder="Agent 公网地址(可选)" />
+          <button type="submit">新增 Agent</button>
+        </form>
+        <div id="agentList"></div>
+      </article>
+
+      <article class="card">
+        <h2>添加 Emby 源站</h2>
+        <form id="upstreamForm">
+          <input name="name" placeholder="源站名称" required />
+          <input name="base_url" placeholder="https://emby.example.com" required />
+          <button type="submit">新增源站</button>
+        </form>
+        <div id="upstreamList"></div>
+      </article>
+
+      <article class="card wide">
+        <h2>创建反代规则</h2>
+        <form id="routeForm" class="row3">
+          <input name="name" placeholder="规则名称(可选)" />
+          <input name="path_prefix" placeholder="/hk-emby" required />
+          <select name="agent_id" id="routeAgent" required></select>
+          <select name="upstream_id" id="routeUpstream" required></select>
+          <button type="submit">创建规则</button>
+        </form>
+        <div id="routeList"></div>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Agent 一键命令</h2>
+      <div class="row2">
+        <select id="cmdAgent"></select>
+        <button id="genCmd">生成命令</button>
+      </div>
+      <textarea id="commandBox" rows="4" readonly></textarea>
+    </section>
+  </main>
+
+  <script src="/static/web/app.js"></script>
+</body>
+</html>
+

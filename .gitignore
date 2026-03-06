@@ -1,0 +1,5 @@
+releases/*
+!releases/.gitkeep
+data/
+*.exe
+*.log
