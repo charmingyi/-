@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/x509"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
@@ -22,6 +24,8 @@ type routeCfg struct {
 	Domain      string `json:"domain"`
 	PathPrefix  string `json:"path_prefix"`
 	UpstreamURL string `json:"upstream_url"`
+	TLSMode     string `json:"tls_mode"`
+	CACertPEM   string `json:"ca_cert_pem"`
 	InsecureTLS bool   `json:"insecure_tls"`
 }
 
@@ -143,14 +147,27 @@ func syncConfig(panelURL, agentID, token string, s *routerState) error {
 		prefixCopy := normalizePrefix(rc.PathPrefix)
 		domainCopy := normalizeHost(rc.Domain)
 		proxy := httputil.NewSingleHostReverseProxy(&upCopy)
-		if rc.InsecureTLS {
-			if baseTransport, ok := http.DefaultTransport.(*http.Transport); ok {
-				t := baseTransport.Clone()
-				if t.TLSClientConfig == nil {
-					t.TLSClientConfig = &tls.Config{}
-				}
-				t.TLSClientConfig.InsecureSkipVerify = true
+		if baseTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+			t := baseTransport.Clone()
+			mode := strings.ToLower(strings.TrimSpace(rc.TLSMode))
+			if mode == "" && rc.InsecureTLS {
+				mode = "insecure"
+			}
+			if mode == "insecure" {
+				t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 				proxy.Transport = t
+			} else if mode == "custom_ca" {
+				raw := strings.TrimSpace(rc.CACertPEM)
+				if strings.HasPrefix(raw, "LS0tLS") {
+					if b, err := base64.StdEncoding.DecodeString(raw); err == nil {
+						raw = string(b)
+					}
+				}
+				pool := x509.NewCertPool()
+				if pool.AppendCertsFromPEM([]byte(raw)) {
+					t.TLSClientConfig = &tls.Config{RootCAs: pool}
+					proxy.Transport = t
+				}
 			}
 		}
 		original := proxy.Director

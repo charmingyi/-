@@ -88,6 +88,12 @@ form {
   gap: 8px;
 }
 
+.row5 {
+  display: grid;
+  grid-template-columns: 1fr 110px 1fr 110px 1fr 170px auto auto;
+  gap: 8px;
+}
+
 .check {
   display: inline-flex;
   align-items: center;
@@ -189,6 +195,9 @@ textarea {
     grid-template-columns: 1fr;
   }
   .row4 {
+    grid-template-columns: 1fr;
+  }
+  .row5 {
     grid-template-columns: 1fr;
   }
   .item,

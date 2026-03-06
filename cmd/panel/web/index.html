@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Emby Relay Hub</title>
-  <link rel="stylesheet" href="/static/web/style.css?v=20260307a" />
+  <link rel="stylesheet" href="/static/web/style.css?v=20260307b" />
 </head>
 <body>
   <main class="container">
@@ -30,7 +30,7 @@
 
       <article class="card">
         <h2>2) Add Emby Upstream</h2>
-        <form id="upstreamForm" class="row4">
+        <form id="upstreamForm" class="row5">
           <input name="name" placeholder="Upstream name" required />
           <select name="scheme">
             <option value="http">http</option>
@@ -38,7 +38,14 @@
           </select>
           <input name="host" placeholder="Public IP / Domain" required />
           <input name="port" type="number" min="1" max="65535" placeholder="Port" required />
-          <label class="check"><input type="checkbox" name="insecure_tls" /> Skip TLS Verify</label>
+          <input name="path" placeholder="Base Path (optional, e.g. /emby)" />
+          <select name="tls_mode" id="tlsMode">
+            <option value="strict" selected>TLS: strict</option>
+            <option value="insecure">TLS: insecure</option>
+            <option value="custom_ca">TLS: custom CA</option>
+          </select>
+          <textarea name="ca_cert_pem" id="caPem" rows="3" placeholder="CA PEM (required when custom CA)" style="display:none;"></textarea>
+          <button type="button" id="probeUpstream">Probe Emby</button>
           <button type="submit">Create Upstream</button>
         </form>
         <div id="upstreamList"></div>
@@ -62,6 +69,6 @@
     </section>
   </main>
 
-  <script src="/static/web/app.js?v=20260307a"></script>
+  <script src="/static/web/app.js?v=20260307b"></script>
 </body>
 </html>

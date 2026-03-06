@@ -3,6 +3,9 @@ const $ = (s) => document.querySelector(s);
 const tokenInput = $("#adminToken");
 const tokenBtn = $("#saveToken");
 const commandBox = $("#commandBox");
+const tlsModeSelect = $("#tlsMode");
+const caPemInput = $("#caPem");
+const probeBtn = $("#probeUpstream");
 
 let state = { agents: [], upstreams: [], routes: [] };
 
@@ -67,24 +70,24 @@ function renderAgents() {
   host.innerHTML =
     '<div class="list">' +
     agents
-      .map((a) => {
-        return `
-          <div class="item item-agent">
-            <div class="item-main">
-              <div class="title-row">
-                <b>${a.name}</b>
-                <span class="badge ${statusClass(a)}">${statusLabel(a)}</span>
-              </div>
-              <small>${a.host || "-"} | ${a.id}</small>
-              <small>Last seen: ${a.last_seen || "-"}</small>
-            </div>
-            <button onclick="copyAgentInstall('${a.id}')">复制对接命令</button>
-            <button onclick="copyAgentUninstall()">复制卸载命令</button>
-            <button onclick="resetToken('${a.id}')">重置Token</button>
-            <button class="danger" onclick="delAgent('${a.id}')">删除</button>
+      .map(
+        (a) => `
+      <div class="item item-agent">
+        <div class="item-main">
+          <div class="title-row">
+            <b>${a.name}</b>
+            <span class="badge ${statusClass(a)}">${statusLabel(a)}</span>
           </div>
-        `;
-      })
+          <small>${a.host || "-"} | ${a.id}</small>
+          <small>Last seen: ${a.last_seen || "-"}</small>
+        </div>
+        <button onclick="copyAgentInstall('${a.id}')">Copy Install Cmd</button>
+        <button onclick="copyAgentUninstall()">Copy Uninstall Cmd</button>
+        <button onclick="resetToken('${a.id}')">Reset Token</button>
+        <button class="danger" onclick="delAgent('${a.id}')">Delete</button>
+      </div>
+    `
+      )
       .join("") +
     "</div>";
 }
@@ -95,18 +98,20 @@ function renderUpstreams() {
   host.innerHTML =
     '<div class="list">' +
     upstreams
-      .map(
-        (u) => `
+      .map((u) => {
+        const tls = u.tls_mode || (u.insecure_tls ? "insecure" : "strict");
+        return `
       <div class="item">
         <div>
           <b>${u.name}</b>
-          <small>${u.base_url}${u.insecure_tls ? " | insecure-tls" : ""}</small>
+          <small>${u.base_url} | tls=${tls}</small>
         </div>
-        <div></div><div></div>
-        <button class="danger" onclick="delUpstream('${u.id}')">删除</button>
+        <button onclick="probeSavedUpstream('${u.id}')">Probe</button>
+        <div></div>
+        <button class="danger" onclick="delUpstream('${u.id}')">Delete</button>
       </div>
-    `
-      )
+    `;
+      })
       .join("") +
     "</div>";
 }
@@ -129,8 +134,9 @@ function renderRoutes() {
           <b>${aMap[r.agent_id] || r.agent_id} -> ${uMap[r.upstream_id] || r.upstream_id}</b>
           <small>${r.domain ? `Domain: ${r.domain}` : `Path: ${r.path_prefix}`}</small>
         </div>
-        <div></div><div></div>
-        <button class="danger" onclick="delRoute('${r.id}')">删除</button>
+        <button onclick="verifyRoute('${r.id}')">Verify</button>
+        <div></div>
+        <button class="danger" onclick="delRoute('${r.id}')">Delete</button>
       </div>
     `
       )
@@ -142,10 +148,10 @@ function renderBinds() {
   const agents = safeArray(state.agents);
   const upstreams = safeArray(state.upstreams);
   $("#bindAgent").innerHTML =
-    `<option value="">选择 Agent</option>` +
+    `<option value="">Select Agent</option>` +
     agents.map((a) => `<option value="${a.id}">${a.name}</option>`).join("");
   $("#bindUpstream").innerHTML =
-    `<option value="">选择 Emby</option>` +
+    `<option value="">Select Emby</option>` +
     upstreams.map((u) => `<option value="${u.id}">${u.name}</option>`).join("");
 }
 
@@ -199,6 +205,44 @@ window.delRoute = async (id) => {
   await loadState();
 };
 
+window.verifyRoute = async (id) => {
+  const data = await api(`/api/routes/verify?id=${encodeURIComponent(id)}`);
+  alert(data.ok ? `Verify OK, status=${data.status}` : `Verify FAIL, status=${data.status || 0}, error=${data.error || "-"}`);
+};
+
+function upstreamPayloadFromForm(formData) {
+  const scheme = String(formData.get("scheme") || "https").trim();
+  const portRaw = Number(formData.get("port"));
+  const port = Number.isFinite(portRaw) && portRaw > 0 ? portRaw : (scheme === "https" ? 443 : 80);
+  return {
+    name: String(formData.get("name") || "").trim(),
+    scheme,
+    host: String(formData.get("host") || "").trim(),
+    port,
+    path: String(formData.get("path") || "").trim(),
+    tls_mode: String(formData.get("tls_mode") || "strict").trim(),
+    ca_cert_pem: String(formData.get("ca_cert_pem") || "").trim(),
+  };
+}
+
+async function doProbe(payload) {
+  const data = await api("/api/upstreams/probe", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  alert(data.ok ? `Probe OK: ${data.reason}` : `Probe FAIL: ${data.reason}`);
+}
+
+window.probeSavedUpstream = async (id) => {
+  const u = safeArray(state.upstreams).find((x) => x.id === id);
+  if (!u) return;
+  await doProbe({
+    base_url: u.base_url,
+    tls_mode: u.tls_mode || (u.insecure_tls ? "insecure" : "strict"),
+    ca_cert_pem: u.ca_cert_pem || "",
+  });
+};
+
 $("#agentForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
@@ -213,24 +257,20 @@ $("#agentForm").addEventListener("submit", async (e) => {
   await loadState();
 });
 
+probeBtn.addEventListener("click", async () => {
+  const form = new FormData($("#upstreamForm"));
+  await doProbe(upstreamPayloadFromForm(form));
+});
+
 $("#upstreamForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
-  const scheme = String(f.get("scheme") || "https").trim();
-  const portRaw = Number(f.get("port"));
-  const port = Number.isFinite(portRaw) && portRaw > 0 ? portRaw : (scheme === "https" ? 443 : 80);
-  const insecureTLS = f.get("insecure_tls") === "on";
   await api("/api/upstreams", {
     method: "POST",
-    body: JSON.stringify({
-      name: String(f.get("name") || "").trim(),
-      scheme,
-      host: String(f.get("host") || "").trim(),
-      port,
-      insecure_tls: insecureTLS,
-    }),
+    body: JSON.stringify(upstreamPayloadFromForm(f)),
   });
   e.target.reset();
+  caPemInput.style.display = "none";
   await loadState();
 });
 
@@ -241,7 +281,7 @@ $("#bindForm").addEventListener("submit", async (e) => {
   const upstreamID = String(f.get("upstream_id") || "");
   const domain = String(f.get("domain") || "").trim();
   if (!agentID || !upstreamID) {
-    alert("请先选择 Agent 和 Emby");
+    alert("Please select Agent and Emby");
     return;
   }
   await api("/api/routes", {
@@ -258,6 +298,10 @@ $("#bindForm").addEventListener("submit", async (e) => {
   await loadState();
 });
 
+tlsModeSelect.addEventListener("change", () => {
+  caPemInput.style.display = tlsModeSelect.value === "custom_ca" ? "block" : "none";
+});
+
 tokenBtn.addEventListener("click", () => {
   localStorage.setItem("admin_token", tokenInput.value.trim());
   loadState().catch((e) => alert(e.message || String(e)));
@@ -265,5 +309,6 @@ tokenBtn.addEventListener("click", () => {
 
 (async () => {
   tokenInput.value = localStorage.getItem("admin_token") || "";
+  caPemInput.style.display = tlsModeSelect.value === "custom_ca" ? "block" : "none";
   await loadState();
 })().catch((e) => alert(e.message || String(e)));

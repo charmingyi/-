@@ -1,15 +1,18 @@
 package main
 
 import (
+	"crypto/tls"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"crypto/x509"
 	"net/url"
 	"net/http"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,10 +55,12 @@ func main() {
     mux.HandleFunc("/api/state", s.auth(s.handleState))
     mux.HandleFunc("/api/agents", s.auth(s.handleAgents))
     mux.HandleFunc("/api/agents/", s.auth(s.handleAgentByID))
-    mux.HandleFunc("/api/upstreams", s.auth(s.handleUpstreams))
-    mux.HandleFunc("/api/upstreams/", s.auth(s.handleUpstreamByID))
-    mux.HandleFunc("/api/routes", s.auth(s.handleRoutes))
-    mux.HandleFunc("/api/routes/", s.auth(s.handleRouteByID))
+	mux.HandleFunc("/api/upstreams", s.auth(s.handleUpstreams))
+	mux.HandleFunc("/api/upstreams/", s.auth(s.handleUpstreamByID))
+	mux.HandleFunc("/api/upstreams/probe", s.auth(s.handleUpstreamProbe))
+	mux.HandleFunc("/api/routes", s.auth(s.handleRoutes))
+	mux.HandleFunc("/api/routes/", s.auth(s.handleRouteByID))
+	mux.HandleFunc("/api/routes/verify", s.auth(s.handleRouteVerify))
 	mux.HandleFunc("/api/agent/install-command", s.auth(s.handleAgentInstallCommand))
 	mux.HandleFunc("/api/agent/config", s.handleAgentConfig)
 	mux.HandleFunc("/api/agent/heartbeat", s.handleAgentHeartbeat)
@@ -168,43 +173,32 @@ func (s *server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
         return
     }
 	var in struct {
-		Name    string `json:"name"`
-		BaseURL string `json:"base_url"`
-		Host    string `json:"host"`
-		Port    int    `json:"port"`
-		Scheme  string `json:"scheme"`
-		InsecureTLS bool `json:"insecure_tls"`
+		Name      string `json:"name"`
+		BaseURL   string `json:"base_url"`
+		Host      string `json:"host"`
+		Port      int    `json:"port"`
+		Scheme    string `json:"scheme"`
+		Path      string `json:"path"`
+		TLSMode   string `json:"tls_mode"`
+		CACertPEM string `json:"ca_cert_pem"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
 
-	baseURL := strings.TrimSpace(in.BaseURL)
-	if baseURL == "" {
-		host := normalizeUpstreamHost(in.Host)
-		if host != "" && in.Port > 0 {
-			scheme := strings.TrimSpace(in.Scheme)
-			if scheme == "" {
-				if in.Port == 443 {
-					scheme = "https"
-				} else {
-					scheme = "http"
-				}
-			}
-			if scheme != "http" && scheme != "https" {
-				scheme = "http"
-			}
-			baseURL = scheme + "://" + host + ":" + strconv.Itoa(in.Port)
-		}
-	}
-
-	u, err := s.store.AddUpstream(in.Name, baseURL, in.InsecureTLS)
+	baseURL, err := buildUpstreamURL(in.BaseURL, in.Host, in.Scheme, in.Path, in.Port)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-    writeJSON(w, http.StatusOK, u)
+
+	u, err := s.store.AddUpstream(in.Name, baseURL, in.TLSMode, in.CACertPEM)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *server) handleUpstreamByID(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +212,37 @@ func (s *server) handleUpstreamByID(w http.ResponseWriter, r *http.Request) {
         return
     }
     writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) handleUpstreamProbe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	var in struct {
+		BaseURL   string `json:"base_url"`
+		Host      string `json:"host"`
+		Port      int    `json:"port"`
+		Scheme    string `json:"scheme"`
+		Path      string `json:"path"`
+		TLSMode   string `json:"tls_mode"`
+		CACertPEM string `json:"ca_cert_pem"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	baseURL, err := buildUpstreamURL(in.BaseURL, in.Host, in.Scheme, in.Path, in.Port)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	ok, reason := probeEmby(baseURL, in.TLSMode, in.CACertPEM)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      ok,
+		"base_url": baseURL,
+		"reason":  reason,
+	})
 }
 
 func (s *server) handleRoutes(w http.ResponseWriter, r *http.Request) {
@@ -255,6 +280,52 @@ func (s *server) handleRouteByID(w http.ResponseWriter, r *http.Request) {
         return
     }
     writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) handleRouteVerify(w http.ResponseWriter, r *http.Request) {
+	routeID := r.URL.Query().Get("id")
+	if strings.TrimSpace(routeID) == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("id is required"))
+		return
+	}
+	st := s.store.Snapshot()
+	var rt *panel.Route
+	for i := range st.Routes {
+		if st.Routes[i].ID == routeID {
+			rt = &st.Routes[i]
+			break
+		}
+	}
+	if rt == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("route not found"))
+		return
+	}
+	var ag *panel.Agent
+	for i := range st.Agents {
+		if st.Agents[i].ID == rt.AgentID {
+			ag = &st.Agents[i]
+			break
+		}
+	}
+	if ag == nil || strings.TrimSpace(ag.Host) == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("agent host is required for verify"))
+		return
+	}
+	targetURL := "http://" + normalizeUpstreamHost(ag.Host) + ":19073/"
+	if rt.Domain == "" {
+		targetURL = "http://" + normalizeUpstreamHost(ag.Host) + ":19073" + rt.PathPrefix
+	}
+	req, _ := http.NewRequest(http.MethodGet, targetURL, nil)
+	if rt.Domain != "" {
+		req.Host = rt.Domain
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "status": 0, "error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": resp.StatusCode < 500, "status": resp.StatusCode})
 }
 
 func (s *server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
@@ -387,5 +458,87 @@ func normalizeUpstreamHost(v string) string {
 		}
 	}
 	return v
+}
+
+func normalizeUpstreamPath(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || v == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(v, "/") {
+		v = "/" + v
+	}
+	return strings.TrimRight(v, "/")
+}
+
+func buildUpstreamURL(baseURL, host, scheme, path string, port int) (string, error) {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL != "" {
+		return strings.TrimRight(baseURL, "/"), nil
+	}
+	host = normalizeUpstreamHost(host)
+	if host == "" || port <= 0 {
+		return "", fmt.Errorf("host and port are required")
+	}
+	scheme = strings.TrimSpace(strings.ToLower(scheme))
+	if scheme == "" {
+		if port == 443 {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	if scheme != "http" && scheme != "https" {
+		return "", fmt.Errorf("scheme must be http or https")
+	}
+	return fmt.Sprintf("%s://%s:%d%s", scheme, host, port, normalizeUpstreamPath(path)), nil
+}
+
+func transportForTLSMode(mode, caCertPEM string) *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "insecure":
+		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	case "custom_ca":
+		pool := x509.NewCertPool()
+		raw := strings.TrimSpace(caCertPEM)
+		if strings.HasPrefix(raw, "LS0tLS") {
+			if b, err := base64.StdEncoding.DecodeString(raw); err == nil {
+				raw = string(b)
+			}
+		}
+		if pool.AppendCertsFromPEM([]byte(raw)) {
+			t.TLSClientConfig = &tls.Config{RootCAs: pool}
+		}
+	}
+	return t
+}
+
+func probeEmby(baseURL, mode, caCertPEM string) (bool, string) {
+	client := &http.Client{
+		Timeout:   12 * time.Second,
+		Transport: transportForTLSMode(mode, caCertPEM),
+	}
+	paths := []string{"/emby/System/Info/Public", "/System/Info/Public", "/web/index.html", "/"}
+	for _, p := range paths {
+		u := strings.TrimRight(baseURL, "/") + p
+		req, _ := http.NewRequest(http.MethodGet, u, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		bs := strings.ToLower(string(body))
+		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		if strings.Contains(ct, "application/json") && strings.Contains(bs, "servername") {
+			return true, "Emby API detected"
+		}
+		if strings.Contains(bs, "emby") && strings.Contains(bs, "web/index") {
+			return true, "Emby web detected"
+		}
+	}
+	return false, "No Emby signature found on tested endpoints"
 }
 

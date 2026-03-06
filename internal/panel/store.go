@@ -27,6 +27,8 @@ type Upstream struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	BaseURL   string    `json:"base_url"`
+	TLSMode   string    `json:"tls_mode"`
+	CACertPEM string    `json:"ca_cert_pem"`
 	InsecureTLS bool    `json:"insecure_tls"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -48,6 +50,8 @@ type AgentRouteConfig struct {
 	Domain      string `json:"domain"`
 	PathPrefix  string `json:"path_prefix"`
 	UpstreamURL string `json:"upstream_url"`
+	TLSMode     string `json:"tls_mode"`
+	CACertPEM   string `json:"ca_cert_pem"`
 	InsecureTLS bool   `json:"insecure_tls"`
 }
 
@@ -112,6 +116,15 @@ func (s *Store) load() error {
 	}
 	if s.data.Routes == nil {
 		s.data.Routes = []Route{}
+	}
+	for i := range s.data.Upstreams {
+		if s.data.Upstreams[i].TLSMode == "" {
+			if s.data.Upstreams[i].InsecureTLS {
+				s.data.Upstreams[i].TLSMode = "insecure"
+			} else {
+				s.data.Upstreams[i].TLSMode = "strict"
+			}
+		}
 	}
 	return nil
 }
@@ -204,15 +217,23 @@ func (s *Store) ResetAgentToken(id string) (Agent, error) {
     return Agent{}, errors.New("agent not found")
 }
 
-func (s *Store) AddUpstream(name, baseURL string, insecureTLS bool) (Upstream, error) {
+func (s *Store) AddUpstream(name, baseURL, tlsMode, caCertPEM string) (Upstream, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	tlsMode = normalizeTLSMode(tlsMode)
+	insecure := tlsMode == "insecure"
+	if tlsMode != "custom_ca" {
+		caCertPEM = ""
+	}
 
 	u := Upstream{
 		ID:        newID("up"),
 		Name:      strings.TrimSpace(name),
 		BaseURL:   normalizeURL(baseURL),
-		InsecureTLS: insecureTLS,
+		TLSMode:   tlsMode,
+		CACertPEM: strings.TrimSpace(caCertPEM),
+		InsecureTLS: insecure,
 		CreatedAt: time.Now().UTC(),
 	}
     if u.Name == "" {
@@ -352,6 +373,8 @@ func (s *Store) AgentConfig(agentID, token string) ([]AgentRouteConfig, error) {
 			Domain:      r.Domain,
 			PathPrefix:  r.PathPrefix,
 			UpstreamURL: u.BaseURL,
+			TLSMode:     u.TLSMode,
+			CACertPEM:   u.CACertPEM,
 			InsecureTLS: u.InsecureTLS,
 		})
 	}
@@ -442,6 +465,16 @@ func normalizeDomain(v string) string {
 		v = strings.Split(v, "/")[0]
 	}
 	return v
+}
+
+func normalizeTLSMode(v string) string {
+	v = strings.TrimSpace(strings.ToLower(v))
+	switch v {
+	case "strict", "insecure", "custom_ca":
+		return v
+	default:
+		return "strict"
+	}
 }
 
 var nonWordPattern = regexp.MustCompile(`[^a-z0-9]+`)
