@@ -325,7 +325,17 @@ func (s *server) handleRouteVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": resp.StatusCode < 500, "status": resp.StatusCode})
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	ok, reason := detectEmbyPayload(resp.StatusCode, resp.Header, body)
+	result := map[string]any{
+		"ok":     ok,
+		"status": resp.StatusCode,
+		"reason": reason,
+	}
+	if !ok {
+		result["sample"] = summarizeBody(body)
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
@@ -529,11 +539,11 @@ func probeEmby(baseURL, mode, caCertPEM string) (bool, string) {
 		if err != nil {
 			continue
 		}
-		if ok, reason := detectEmbyResponse(resp); ok {
-			resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		if ok, reason := detectEmbyPayload(resp.StatusCode, resp.Header, body); ok {
 			return true, reason
 		}
-		resp.Body.Close()
 	}
 	return false, "No Emby signature found on tested endpoints"
 }
@@ -575,10 +585,10 @@ func probeTargets(baseURL string) ([]string, error) {
 	return targets, nil
 }
 
-func detectEmbyResponse(resp *http.Response) (bool, string) {
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	server := strings.ToLower(resp.Header.Get("Server"))
-	location := strings.ToLower(resp.Header.Get("Location"))
+func detectEmbyPayload(status int, header http.Header, body []byte) (bool, string) {
+	ct := strings.ToLower(header.Get("Content-Type"))
+	server := strings.ToLower(header.Get("Server"))
+	location := strings.ToLower(header.Get("Location"))
 	if strings.Contains(server, "emby") {
 		return true, "Emby response headers detected"
 	}
@@ -587,7 +597,7 @@ func detectEmbyResponse(resp *http.Response) (bool, string) {
 	}
 	if strings.Contains(ct, "application/json") {
 		var payload map[string]any
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&payload); err == nil {
+		if err := json.Unmarshal(body, &payload); err == nil {
 			if _, ok := payload["ServerName"]; ok {
 				return true, "Emby API detected"
 			}
@@ -595,10 +605,6 @@ func detectEmbyResponse(resp *http.Response) (bool, string) {
 				return true, "Emby API detected"
 			}
 		}
-		return false, ""
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8192))
-	if err != nil {
 		return false, ""
 	}
 	bs := strings.ToLower(string(body))
@@ -609,8 +615,21 @@ func detectEmbyResponse(resp *http.Response) (bool, string) {
 		return true, "Emby startup page detected"
 	case strings.Contains(bs, "emby") && (strings.Contains(bs, "serverid=") || strings.Contains(bs, "startup/") || strings.Contains(bs, "manuallogin") || strings.Contains(bs, "emby-webcomponents")):
 		return true, "Emby web detected"
+	case status >= 500:
+		return false, "Upstream returned server error"
 	default:
 		return false, ""
 	}
+}
+
+func summarizeBody(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 180 {
+		s = s[:180]
+	}
+	return s
 }
 

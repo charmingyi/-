@@ -207,7 +207,15 @@ window.delRoute = async (id) => {
 
 window.verifyRoute = async (id) => {
   const data = await api(`/api/routes/verify?id=${encodeURIComponent(id)}`);
-  alert(data.ok ? `Verify OK, status=${data.status}` : `Verify FAIL, status=${data.status || 0}, error=${data.error || "-"}`);
+  if (data.ok) {
+    alert(`Verify OK: ${data.reason || "-"}, status=${data.status}`);
+    return;
+  }
+  alert(
+    `Verify FAIL: ${data.reason || data.error || "-"}, status=${data.status || 0}${
+      data.sample ? `\nSample: ${data.sample}` : ""
+    }`
+  );
 };
 
 function upstreamPayloadFromForm(formData) {
