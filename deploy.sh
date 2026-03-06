@@ -5,8 +5,8 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${APP_DIR}/.venv"
 SERVICE_NAME="emby-relay-hub"
 PYTHON_BIN="python3"
-HOST="0.0.0.0"
-PORT="8000"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8000}"
 
 if [[ "${EUID}" -eq 0 ]]; then
   RUNNER_USER="${SUDO_USER:-root}"
@@ -62,6 +62,8 @@ After=network.target
 Type=simple
 User=${RUNNER_USER}
 WorkingDirectory=${APP_DIR}
+Environment=HOST=${HOST}
+Environment=PORT=${PORT}
 ExecStart=${VENV_DIR}/bin/uvicorn app:app --host ${HOST} --port ${PORT}
 Restart=always
 RestartSec=3
@@ -79,6 +81,7 @@ print_summary() {
   info "部署完成 ✅"
   echo "----------------------------------------"
   echo "服务名: ${SERVICE_NAME}"
+  echo "监听地址: ${HOST}:${PORT}"
   echo "访问地址: http://<你的服务器IP>:${PORT}"
   echo "查看状态: ${SUDO_CMD} systemctl status ${SERVICE_NAME} --no-pager"
   echo "查看日志: ${SUDO_CMD} journalctl -u ${SERVICE_NAME} -f"
