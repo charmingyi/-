@@ -72,6 +72,32 @@ textarea { width: 100%; resize: vertical; }
 }
 .item b { display: block; }
 .item small { color: var(--muted); }
+.item-agent {
+  grid-template-columns: 1fr auto auto auto auto;
+}
+.item-main {
+  min-width: 0;
+}
+.cmd-row {
+  margin-top: 8px;
+}
+.cmd-row label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.cmd-row code {
+  display: block;
+  background: #f5f5f5;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 .bg-shape {
   position: fixed;
   width: 320px;
@@ -87,5 +113,6 @@ textarea { width: 100%; resize: vertical; }
   .grid { grid-template-columns: 1fr; }
   .row3 { grid-template-columns: 1fr; }
   .item { grid-template-columns: 1fr; }
+  .item-agent { grid-template-columns: 1fr; }
 }
 

@@ -52,9 +52,17 @@ type State struct {
 }
 
 type Store struct {
-    mu   sync.RWMutex
-    path string
-    data State
+	mu   sync.RWMutex
+	path string
+	data State
+}
+
+func emptyState() State {
+	return State{
+		Agents:    []Agent{},
+		Upstreams: []Upstream{},
+		Routes:    []Route{},
+	}
 }
 
 func NewStore(path string) (*Store, error) {
@@ -73,24 +81,33 @@ func (s *Store) load() error {
         return err
     }
 
-    b, err := os.ReadFile(s.path)
-    if errors.Is(err, os.ErrNotExist) {
-        s.data = State{}
-        return s.saveLocked()
-    }
+	b, err := os.ReadFile(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		s.data = emptyState()
+		return s.saveLocked()
+	}
     if err != nil {
         return err
     }
 
-    if len(strings.TrimSpace(string(b))) == 0 {
-        s.data = State{}
-        return s.saveLocked()
-    }
+	if len(strings.TrimSpace(string(b))) == 0 {
+		s.data = emptyState()
+		return s.saveLocked()
+	}
 
-    if err := json.Unmarshal(b, &s.data); err != nil {
-        return err
-    }
-    return nil
+	if err := json.Unmarshal(b, &s.data); err != nil {
+		return err
+	}
+	if s.data.Agents == nil {
+		s.data.Agents = []Agent{}
+	}
+	if s.data.Upstreams == nil {
+		s.data.Upstreams = []Upstream{}
+	}
+	if s.data.Routes == nil {
+		s.data.Routes = []Route{}
+	}
+	return nil
 }
 
 func (s *Store) saveLocked() error {
@@ -105,11 +122,20 @@ func (s *Store) Snapshot() State {
     s.mu.RLock()
     defer s.mu.RUnlock()
 
-    out := s.data
-    sort.Slice(out.Agents, func(i, j int) bool { return out.Agents[i].CreatedAt.After(out.Agents[j].CreatedAt) })
-    sort.Slice(out.Upstreams, func(i, j int) bool { return out.Upstreams[i].CreatedAt.After(out.Upstreams[j].CreatedAt) })
-    sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].CreatedAt.After(out.Routes[j].CreatedAt) })
-    return out
+	out := s.data
+	if out.Agents == nil {
+		out.Agents = []Agent{}
+	}
+	if out.Upstreams == nil {
+		out.Upstreams = []Upstream{}
+	}
+	if out.Routes == nil {
+		out.Routes = []Route{}
+	}
+	sort.Slice(out.Agents, func(i, j int) bool { return out.Agents[i].CreatedAt.After(out.Agents[j].CreatedAt) })
+	sort.Slice(out.Upstreams, func(i, j int) bool { return out.Upstreams[i].CreatedAt.After(out.Upstreams[j].CreatedAt) })
+	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].CreatedAt.After(out.Routes[j].CreatedAt) })
+	return out
 }
 
 func (s *Store) AddAgent(name, host string) (Agent, error) {
