@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Emby Relay Hub</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <main class="max-w-7xl mx-auto p-6 space-y-6">
+    <header class="rounded-2xl bg-gradient-to-r from-cyan-600/40 to-violet-600/40 p-6 border border-white/10">
+      <h1 class="text-3xl font-bold">Emby Relay Hub</h1>
+      <p class="text-slate-300 mt-2">统一管理优化线路 Agent 与 Emby 源站，快速生成反代入口。</p>
+    </header>
+
+    <section class="grid lg:grid-cols-3 gap-6">
+      <form action="/agents" method="post" class="bg-slate-900/70 border border-cyan-300/20 rounded-2xl p-5 space-y-3">
+        <h2 class="text-xl font-semibold text-cyan-300">新增 Agent（优化机）</h2>
+        <input name="name" required placeholder="名称：HK-CN2-01" class="w-full rounded-lg bg-slate-800 p-2" />
+        <input name="relay_url" required placeholder="Agent 地址：http://1.2.3.4:9000" class="w-full rounded-lg bg-slate-800 p-2" />
+        <input name="token" required placeholder="安全 Token" class="w-full rounded-lg bg-slate-800 p-2" />
+        <textarea name="notes" placeholder="备注" class="w-full rounded-lg bg-slate-800 p-2"></textarea>
+        <button class="w-full rounded-lg bg-cyan-500 hover:bg-cyan-400 py-2 font-semibold">保存 Agent</button>
+      </form>
+
+      <form action="/upstreams" method="post" class="bg-slate-900/70 border border-violet-300/20 rounded-2xl p-5 space-y-3">
+        <h2 class="text-xl font-semibold text-violet-300">新增 Emby 源站</h2>
+        <input name="name" required placeholder="名称：家宽 Emby" class="w-full rounded-lg bg-slate-800 p-2" />
+        <input name="base_url" required placeholder="源站 URL：http://origin.example.com:8096" class="w-full rounded-lg bg-slate-800 p-2" />
+        <textarea name="notes" placeholder="备注" class="w-full rounded-lg bg-slate-800 p-2"></textarea>
+        <button class="w-full rounded-lg bg-violet-500 hover:bg-violet-400 py-2 font-semibold">保存源站</button>
+      </form>
+
+      <form action="/routes" method="post" class="bg-slate-900/70 border border-emerald-300/20 rounded-2xl p-5 space-y-3">
+        <h2 class="text-xl font-semibold text-emerald-300">创建反代入口</h2>
+        <input name="name" required placeholder="入口名称：主站线路" class="w-full rounded-lg bg-slate-800 p-2" />
+        <input name="slug" required placeholder="访问标识：main" class="w-full rounded-lg bg-slate-800 p-2" />
+        <select name="agent_id" class="w-full rounded-lg bg-slate-800 p-2" required>
+          <option value="">选择 Agent</option>
+          {% for agent in agents %}
+          <option value="{{ agent.id }}">{{ agent.name }}</option>
+          {% endfor %}
+        </select>
+        <select name="upstream_id" class="w-full rounded-lg bg-slate-800 p-2" required>
+          <option value="">选择 Emby 源站</option>
+          {% for upstream in upstreams %}
+          <option value="{{ upstream.id }}">{{ upstream.name }}</option>
+          {% endfor %}
+        </select>
+        <button class="w-full rounded-lg bg-emerald-500 hover:bg-emerald-400 py-2 font-semibold">创建入口</button>
+      </form>
+    </section>
+
+    <section class="grid lg:grid-cols-3 gap-6">
+      <div class="bg-slate-900/70 border border-white/10 rounded-2xl p-5">
+        <h3 class="text-lg font-semibold mb-3">Agent 列表</h3>
+        <div class="space-y-2 text-sm">
+          {% for item in agents %}
+          <div class="rounded-lg bg-slate-800/70 p-3">
+            <p class="font-semibold">{{ item.name }}</p>
+            <p class="text-slate-300 break-all">{{ item.relay_url }}</p>
+            <p class="text-slate-400">{{ item.notes }}</p>
+          </div>
+          {% else %}
+          <p class="text-slate-400">还没有 Agent</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="bg-slate-900/70 border border-white/10 rounded-2xl p-5">
+        <h3 class="text-lg font-semibold mb-3">源站列表</h3>
+        <div class="space-y-2 text-sm">
+          {% for item in upstreams %}
+          <div class="rounded-lg bg-slate-800/70 p-3">
+            <p class="font-semibold">{{ item.name }}</p>
+            <p class="text-slate-300 break-all">{{ item.base_url }}</p>
+            <p class="text-slate-400">{{ item.notes }}</p>
+          </div>
+          {% else %}
+          <p class="text-slate-400">还没有源站</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="bg-slate-900/70 border border-white/10 rounded-2xl p-5">
+        <h3 class="text-lg font-semibold mb-3">反代入口</h3>
+        <div class="space-y-2 text-sm">
+          {% for item in routes %}
+          <div class="rounded-lg bg-slate-800/70 p-3">
+            <p class="font-semibold">{{ item.name }} ({{ item.slug }})</p>
+            <p class="text-slate-300">Agent：{{ agent_map[item.agent_id].name if item.agent_id in agent_map else 'N/A' }}</p>
+            <p class="text-slate-300">源站：{{ upstream_map[item.upstream_id].name if item.upstream_id in upstream_map else 'N/A' }}</p>
+            <p class="text-emerald-300 break-all">/proxy/{{ item.slug }}/web/index.html</p>
+          </div>
+          {% else %}
+          <p class="text-slate-400">还没有反代入口</p>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
