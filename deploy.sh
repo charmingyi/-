@@ -15,18 +15,102 @@ PANEL_LISTEN="${PANEL_LISTEN:-:18473}"
 PANEL_PUBLIC_URL="${PANEL_PUBLIC_URL:-}"
 ADMIN_TOKEN="${ADMIN_TOKEN:-}"
 
+GO_VERSION="${GO_VERSION:-1.22.12}"
+GO_INSTALL_DIR="/usr/local"
+
 need_root() {
   if [ "${EUID}" -ne 0 ]; then
-    echo "Please run as root: sudo bash deploy.sh"
+    echo "Please run as root, e.g. sudo bash deploy.sh"
     exit 1
   fi
 }
 
-need_go() {
-  if ! command -v go >/dev/null 2>&1; then
-    echo "Go is required. Install Go 1.22+ first."
+append_path_profile() {
+  local profile_file
+  profile_file="/etc/profile.d/go-path.sh"
+  if [ ! -f "${profile_file}" ] || ! grep -q '/usr/local/go/bin' "${profile_file}"; then
+    cat > "${profile_file}" <<'EOF'
+export PATH=/usr/local/go/bin:$PATH
+EOF
+  fi
+  export PATH=/usr/local/go/bin:$PATH
+}
+
+pkg_install() {
+  local pkg="$1"
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkg}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y "${pkg}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  if command -v yum >/dev/null 2>&1; then
+    yum install -y "${pkg}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  return 1
+}
+
+ensure_base_tools() {
+  command -v curl >/dev/null 2>&1 || pkg_install curl
+  command -v tar >/dev/null 2>&1 || pkg_install tar
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "Missing curl and auto-install failed."
     exit 1
   fi
+  if ! command -v tar >/dev/null 2>&1; then
+    echo "Missing tar and auto-install failed."
+    exit 1
+  fi
+
+  pkg_install ca-certificates >/dev/null 2>&1 || true
+  update-ca-certificates >/dev/null 2>&1 || true
+}
+
+go_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "amd64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    armv7l|armv6l|armhf) echo "armv6l" ;;
+    *) echo "unsupported" ;;
+  esac
+}
+
+install_go() {
+  local arch go_tgz_url tmp_dir
+
+  arch="$(go_arch)"
+  if [ "${arch}" = "unsupported" ]; then
+    echo "Unsupported CPU arch: $(uname -m)"
+    exit 1
+  fi
+
+  tmp_dir="$(mktemp -d)"
+  go_tgz_url="https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz"
+
+  echo "Installing Go ${GO_VERSION} (${arch})..."
+  curl -fL -s "${go_tgz_url}" -o "${tmp_dir}/go.tgz"
+  rm -rf "${GO_INSTALL_DIR}/go"
+  tar -C "${GO_INSTALL_DIR}" -xzf "${tmp_dir}/go.tgz"
+  append_path_profile
+
+  if ! command -v go >/dev/null 2>&1; then
+    echo "Go install failed."
+    exit 1
+  fi
+}
+
+ensure_go() {
+  append_path_profile
+  if command -v go >/dev/null 2>&1; then
+    echo "Detected $(go version)"
+    return 0
+  fi
+  install_go
 }
 
 download_source() {
@@ -40,7 +124,7 @@ download_source() {
 
   SRC_DIR="$(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d | head -n1)"
   if [ -z "${SRC_DIR}" ] || [ ! -f "${SRC_DIR}/go.mod" ]; then
-    echo "Invalid source archive. Check REPO_OWNER/REPO_NAME/REPO_BRANCH"
+    echo "Invalid source archive. Check REPO_OWNER / REPO_NAME / REPO_BRANCH."
     exit 1
   fi
 }
@@ -92,7 +176,8 @@ EOF
 
 main() {
   need_root
-  need_go
+  ensure_base_tools
+  ensure_go
   download_source
   build_panel
   mkdir -p "${INSTALL_DIR}/data"
@@ -100,7 +185,10 @@ main() {
   write_service
   systemctl daemon-reload
   systemctl enable --now "${APP_NAME}"
-  echo "Panel installed and running: ${PANEL_PUBLIC_URL}"
+
+  echo "Deploy completed."
+  echo "Panel URL: ${PANEL_PUBLIC_URL}"
+  echo "Service status: systemctl status ${APP_NAME} --no-pager"
 }
 
 main "$@"
