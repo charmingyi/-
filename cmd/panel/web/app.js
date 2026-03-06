@@ -33,12 +33,12 @@ function panelBase() {
 
 function cmdInstall(agent) {
   const base = panelBase();
-  return `curl -fsSL ${base}/install/agent-menu.sh | sudo env PANEL_URL='${base}' AGENT_ID='${agent.id}' AGENT_TOKEN='${agent.token}' bash -s -- menu`;
+  return `sudo env PANEL_URL='${base}' AGENT_ID='${agent.id}' AGENT_TOKEN='${agent.token}' bash -c 'tmp=$(mktemp); curl -fsSL ${base}/install/agent-menu.sh -o "$tmp"; bash "$tmp" menu; rm -f "$tmp"'`;
 }
 
 function cmdUninstall() {
   const base = panelBase();
-  return `curl -fsSL ${base}/install/agent-menu.sh | sudo bash -s -- uninstall`;
+  return `sudo bash -c 'tmp=$(mktemp); curl -fsSL ${base}/install/agent-menu.sh -o "$tmp"; bash "$tmp" uninstall; rm -f "$tmp"'`;
 }
 
 async function copyCommand(text) {

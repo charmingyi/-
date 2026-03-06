@@ -279,14 +279,14 @@ func (s *server) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleAgentInstallCommand(w http.ResponseWriter, r *http.Request) {
-    agentID := r.URL.Query().Get("id")
-    a, ok := s.store.GetAgent(agentID)
-    if !ok {
-        writeErr(w, http.StatusNotFound, fmt.Errorf("agent not found"))
-        return
-    }
-    cmd := fmt.Sprintf("curl -fsSL %s/install/agent-menu.sh | sudo env PANEL_URL='%s' AGENT_ID='%s' AGENT_TOKEN='%s' bash -s -- menu", s.panelURL, s.panelURL, a.ID, a.Token)
-    writeJSON(w, http.StatusOK, map[string]string{"command": cmd})
+	agentID := r.URL.Query().Get("id")
+	a, ok := s.store.GetAgent(agentID)
+	if !ok {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("agent not found"))
+		return
+	}
+	cmd := fmt.Sprintf("sudo env PANEL_URL='%s' AGENT_ID='%s' AGENT_TOKEN='%s' bash -c 'tmp=$(mktemp); curl -fsSL %s/install/agent-menu.sh -o \"$tmp\"; bash \"$tmp\" menu; rm -f \"$tmp\"'", s.panelURL, a.ID, a.Token, s.panelURL)
+	writeJSON(w, http.StatusOK, map[string]string{"command": cmd})
 }
 
 func (s *server) handleInstallScript(w http.ResponseWriter, _ *http.Request) {
