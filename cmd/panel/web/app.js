@@ -216,13 +216,16 @@ $("#agentForm").addEventListener("submit", async (e) => {
 $("#upstreamForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
+  const scheme = String(f.get("scheme") || "https").trim();
+  const portRaw = Number(f.get("port"));
+  const port = Number.isFinite(portRaw) && portRaw > 0 ? portRaw : (scheme === "https" ? 443 : 80);
   await api("/api/upstreams", {
     method: "POST",
     body: JSON.stringify({
       name: String(f.get("name") || "").trim(),
+      scheme,
       host: String(f.get("host") || "").trim(),
-      port: Number(f.get("port")),
-      scheme: "http",
+      port,
     }),
   });
   e.target.reset();

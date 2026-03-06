@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"net/http"
 	"os"
 	"path"
@@ -180,10 +181,17 @@ func (s *server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 
 	baseURL := strings.TrimSpace(in.BaseURL)
 	if baseURL == "" {
-		host := strings.TrimSpace(in.Host)
+		host := normalizeUpstreamHost(in.Host)
 		if host != "" && in.Port > 0 {
 			scheme := strings.TrimSpace(in.Scheme)
 			if scheme == "" {
+				if in.Port == 443 {
+					scheme = "https"
+				} else {
+					scheme = "http"
+				}
+			}
+			if scheme != "http" && scheme != "https" {
 				scheme = "http"
 			}
 			baseURL = scheme + "://" + host + ":" + strconv.Itoa(in.Port)
@@ -351,6 +359,32 @@ func getEnv(k, d string) string {
     if v == "" {
         return d
     }
-    return v
+	return v
+}
+
+func normalizeUpstreamHost(v string) string {
+	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" {
+		return ""
+	}
+	if strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://") {
+		if u, err := url.Parse(v); err == nil {
+			v = u.Host
+		}
+	}
+	v = strings.TrimSuffix(v, "/")
+	if strings.Contains(v, "/") {
+		v = strings.Split(v, "/")[0]
+	}
+	if strings.Contains(v, ":") {
+		host, _, found := strings.Cut(v, ":")
+		if !found {
+			return v
+		}
+		if host != "" {
+			return host
+		}
+	}
+	return v
 }
 

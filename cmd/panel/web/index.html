@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Emby Relay Hub</title>
-  <link rel="stylesheet" href="/static/web/style.css?v=20260306d" />
+  <link rel="stylesheet" href="/static/web/style.css?v=20260306e" />
 </head>
 <body>
   <main class="container">
@@ -30,8 +30,12 @@
 
       <article class="card">
         <h2>2) Add Emby Upstream</h2>
-        <form id="upstreamForm" class="row3">
+        <form id="upstreamForm" class="row4">
           <input name="name" placeholder="Upstream name" required />
+          <select name="scheme">
+            <option value="http">http</option>
+            <option value="https" selected>https</option>
+          </select>
           <input name="host" placeholder="Public IP / Domain" required />
           <input name="port" type="number" min="1" max="65535" placeholder="Port" required />
           <button type="submit">Create Upstream</button>
@@ -57,6 +61,6 @@
     </section>
   </main>
 
-  <script src="/static/web/app.js?v=20260306d"></script>
+  <script src="/static/web/app.js?v=20260306e"></script>
 </body>
 </html>

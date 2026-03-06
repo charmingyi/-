@@ -82,6 +82,12 @@ form {
   gap: 8px;
 }
 
+.row4 {
+  display: grid;
+  grid-template-columns: 1fr 110px 1fr 130px auto;
+  gap: 8px;
+}
+
 input,
 select,
 button,
@@ -170,6 +176,9 @@ textarea {
     grid-template-columns: 1fr;
   }
   .row3 {
+    grid-template-columns: 1fr;
+  }
+  .row4 {
     grid-template-columns: 1fr;
   }
   .item,
