@@ -136,6 +136,14 @@ build_panel() {
   CGO_ENABLED=0 go build -o "${BIN_PATH}" ./cmd/panel
 }
 
+build_agents() {
+  cd "${INSTALL_DIR}/src"
+  mkdir -p releases
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o releases/agent-linux-amd64 ./cmd/agent
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o releases/agent-linux-arm64 ./cmd/agent
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o releases/agent-linux-arm ./cmd/agent
+}
+
 write_env() {
   if [ -z "${PANEL_PUBLIC_URL}" ]; then
     local host_ip
@@ -179,6 +187,7 @@ install_panel() {
   ensure_go
   download_source
   build_panel
+  build_agents
   mkdir -p "${INSTALL_DIR}/data"
   write_env
   write_service
@@ -194,6 +203,7 @@ update_panel() {
   ensure_go
   download_source
   build_panel
+  build_agents
   write_env
   write_service
   systemctl daemon-reload
