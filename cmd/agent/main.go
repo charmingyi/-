@@ -1,12 +1,13 @@
 package main
 
 import (
-    "encoding/json"
-    "io"
-    "log"
-    "net/http"
-    "net/http/httputil"
-    "net/url"
+	"encoding/json"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
     "os"
     "sort"
     "strings"
@@ -15,10 +16,11 @@ import (
 )
 
 type routeCfg struct {
-    RouteID     string `json:"route_id"`
-    Name        string `json:"name"`
-    PathPrefix  string `json:"path_prefix"`
-    UpstreamURL string `json:"upstream_url"`
+	RouteID     string `json:"route_id"`
+	Name        string `json:"name"`
+	Domain      string `json:"domain"`
+	PathPrefix  string `json:"path_prefix"`
+	UpstreamURL string `json:"upstream_url"`
 }
 
 type configResp struct {
@@ -27,9 +29,10 @@ type configResp struct {
 }
 
 type routeProxy struct {
-    PathPrefix string
-    Upstream   *url.URL
-    Proxy      *httputil.ReverseProxy
+	Domain     string
+	PathPrefix string
+	Upstream   *url.URL
+	Proxy      *httputil.ReverseProxy
 }
 
 type routerState struct {
@@ -79,22 +82,29 @@ func main() {
 }
 
 func (s *routerState) handleProxy(w http.ResponseWriter, r *http.Request) {
-    rp := s.match(r.URL.Path)
-    if rp == nil {
-        http.Error(w, "no route matched", http.StatusNotFound)
-        return
-    }
-    rp.Proxy.ServeHTTP(w, r)
+	rp := s.match(r.Host, r.URL.Path)
+	if rp == nil {
+		http.Error(w, "no route matched", http.StatusNotFound)
+		return
+	}
+	rp.Proxy.ServeHTTP(w, r)
 }
 
-func (s *routerState) match(path string) *routeProxy {
-    s.mu.RLock()
-    defer s.mu.RUnlock()
-    for i := range s.routes {
-        p := s.routes[i].PathPrefix
-        if path == p || strings.HasPrefix(path, p+"/") {
-            return &s.routes[i]
-        }
+func (s *routerState) match(host, path string) *routeProxy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	host = normalizeHost(host)
+	for i := range s.routes {
+		p := s.routes[i]
+		if p.Domain != "" && p.Domain == host {
+			return &s.routes[i]
+		}
+	}
+	for i := range s.routes {
+		p := s.routes[i].PathPrefix
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return &s.routes[i]
+		}
     }
     return nil
 }
@@ -127,18 +137,23 @@ func syncConfig(panelURL, agentID, token string, s *routerState) error {
             continue
         }
 
-        upCopy := *up
-        prefixCopy := normalizePrefix(rc.PathPrefix)
-        proxy := httputil.NewSingleHostReverseProxy(&upCopy)
-        original := proxy.Director
-        proxy.Director = func(req *http.Request) {
-            original(req)
-            req.Host = upCopy.Host
-            req.URL.Path = joinPath(upCopy.Path, stripPrefix(req.URL.Path, prefixCopy))
-        }
+		upCopy := *up
+		prefixCopy := normalizePrefix(rc.PathPrefix)
+		domainCopy := normalizeHost(rc.Domain)
+		proxy := httputil.NewSingleHostReverseProxy(&upCopy)
+		original := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			original(req)
+			req.Host = upCopy.Host
+			if domainCopy != "" {
+				req.URL.Path = joinPath(upCopy.Path, req.URL.Path)
+				return
+			}
+			req.URL.Path = joinPath(upCopy.Path, stripPrefix(req.URL.Path, prefixCopy))
+		}
 
-        routes = append(routes, routeProxy{PathPrefix: prefixCopy, Upstream: &upCopy, Proxy: proxy})
-    }
+		routes = append(routes, routeProxy{Domain: domainCopy, PathPrefix: prefixCopy, Upstream: &upCopy, Proxy: proxy})
+	}
 
     sort.Slice(routes, func(i, j int) bool { return len(routes[i].PathPrefix) > len(routes[j].PathPrefix) })
 
@@ -236,6 +251,20 @@ func envDuration(k string, d time.Duration) time.Duration {
     if v < 5*time.Second {
         return 5 * time.Second
     }
+	return v
+}
+
+func normalizeHost(v string) string {
+	v = strings.TrimSpace(strings.ToLower(v))
+	if h, _, err := net.SplitHostPort(v); err == nil {
+		return h
+	}
+	if i := strings.Index(v, ":"); i > -1 && strings.Count(v, ":") == 1 {
+		host := v[:i]
+		if host != "" {
+			return host
+		}
+	}
 	return v
 }
 

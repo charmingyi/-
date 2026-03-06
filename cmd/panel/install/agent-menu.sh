@@ -10,6 +10,7 @@ PANEL_URL="${PANEL_URL:-}"
 AGENT_ID="${AGENT_ID:-}"
 AGENT_TOKEN="${AGENT_TOKEN:-}"
 LISTEN_ADDR="${LISTEN_ADDR:-:19073}"
+TLS_DOMAIN="${TLS_DOMAIN:-}"
 
 need_root() {
   if [ "${EUID}" -ne 0 ]; then
@@ -113,6 +114,55 @@ logs_agent() {
   journalctl -u "$APP_NAME" -n 120 --no-pager || true
 }
 
+install_pkg() {
+  local pkg="$1"
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg"
+    return 0
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y "$pkg"
+    return 0
+  fi
+  if command -v yum >/dev/null 2>&1; then
+    yum install -y "$pkg"
+    return 0
+  fi
+  return 1
+}
+
+setup_tls() {
+  need_root
+  local domain
+  domain="${TLS_DOMAIN}"
+  if [ -z "$domain" ]; then
+    read -r -p "Domain (must resolve to this server): " domain < /dev/tty
+  fi
+  if [ -z "$domain" ]; then
+    echo "Domain is required"
+    return 1
+  fi
+
+  if ! command -v caddy >/dev/null 2>&1; then
+    install_pkg caddy || true
+  fi
+  if ! command -v caddy >/dev/null 2>&1; then
+    echo "caddy not found and auto install failed. Please install caddy manually."
+    return 1
+  fi
+
+  cat > /etc/caddy/Caddyfile <<EOF
+${domain} {
+  reverse_proxy 127.0.0.1${LISTEN_ADDR}
+}
+EOF
+
+  systemctl enable --now caddy
+  systemctl restart caddy
+  echo "TLS enabled for https://${domain}"
+}
+
 menu() {
   local input_dev
   input_dev="/dev/tty"
@@ -129,6 +179,7 @@ menu() {
 3) Uninstall
 4) Status
 5) Logs
+6) Setup TLS (Caddy + Auto Cert)
 0) Exit
 EOF
     read -r -p "Select: " c < "$input_dev" || exit 0
@@ -138,6 +189,7 @@ EOF
       3) uninstall_agent ;;
       4) status_agent ;;
       5) logs_agent ;;
+      6) setup_tls ;;
       0) exit 0 ;;
       *) echo "Invalid" ;;
     esac
@@ -151,6 +203,7 @@ case "$cmd" in
   uninstall) uninstall_agent ;;
   status) status_agent ;;
   logs) logs_agent ;;
+  tls) setup_tls ;;
   menu) menu ;;
-  *) echo "Usage: [menu|install|update|uninstall|status|logs]"; exit 1 ;;
+  *) echo "Usage: [menu|install|update|uninstall|status|logs|tls]"; exit 1 ;;
 esac

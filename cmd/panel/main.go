@@ -216,17 +216,18 @@ func (s *server) handleRoutes(w http.ResponseWriter, r *http.Request) {
         methodNotAllowed(w)
         return
     }
-    var in struct {
-        Name       string `json:"name"`
-        PathPrefix string `json:"path_prefix"`
-        AgentID    string `json:"agent_id"`
-        UpstreamID string `json:"upstream_id"`
+	var in struct {
+		Name       string `json:"name"`
+		Domain     string `json:"domain"`
+		PathPrefix string `json:"path_prefix"`
+		AgentID    string `json:"agent_id"`
+		UpstreamID string `json:"upstream_id"`
     }
     if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
         writeErr(w, http.StatusBadRequest, err)
         return
     }
-    route, err := s.store.AddRoute(in.Name, in.PathPrefix, in.AgentID, in.UpstreamID)
+	route, err := s.store.AddRoute(in.Name, in.Domain, in.PathPrefix, in.AgentID, in.UpstreamID)
     if err != nil {
         writeErr(w, http.StatusBadRequest, err)
         return

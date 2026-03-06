@@ -40,11 +40,11 @@
       </article>
 
       <article class="card wide">
-        <h2>3) Bind Agent -> Emby</h2>
+        <h2>3) Bind Agent -> Emby (optional domain)</h2>
         <form id="bindForm" class="row3">
           <select id="bindAgent" name="agent_id" required></select>
           <select id="bindUpstream" name="upstream_id" required></select>
-          <div></div>
+          <input name="domain" placeholder="Domain (optional, e.g. emby.example.com)" />
           <button type="submit">Create Binding</button>
         </form>
         <div id="routeList"></div>

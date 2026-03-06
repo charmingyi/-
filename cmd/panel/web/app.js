@@ -127,7 +127,7 @@ function renderRoutes() {
       <div class="item">
         <div>
           <b>${aMap[r.agent_id] || r.agent_id} -> ${uMap[r.upstream_id] || r.upstream_id}</b>
-          <small>Path: ${r.path_prefix}</small>
+          <small>${r.domain ? `Domain: ${r.domain}` : `Path: ${r.path_prefix}`}</small>
         </div>
         <div></div><div></div>
         <button class="danger" onclick="delRoute('${r.id}')">删除</button>
@@ -234,6 +234,7 @@ $("#bindForm").addEventListener("submit", async (e) => {
   const f = new FormData(e.target);
   const agentID = String(f.get("agent_id") || "");
   const upstreamID = String(f.get("upstream_id") || "");
+  const domain = String(f.get("domain") || "").trim();
   if (!agentID || !upstreamID) {
     alert("请先选择 Agent 和 Emby");
     return;
@@ -242,11 +243,13 @@ $("#bindForm").addEventListener("submit", async (e) => {
     method: "POST",
     body: JSON.stringify({
       name: "",
-      path_prefix: "",
+      domain,
+      path_prefix: domain ? "/" : "",
       agent_id: agentID,
       upstream_id: upstreamID,
     }),
   });
+  e.target.reset();
   await loadState();
 });
 

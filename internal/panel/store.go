@@ -31,20 +31,22 @@ type Upstream struct {
 }
 
 type Route struct {
-    ID         string    `json:"id"`
-    Name       string    `json:"name"`
-    PathPrefix string    `json:"path_prefix"`
-    AgentID    string    `json:"agent_id"`
-    UpstreamID string    `json:"upstream_id"`
-    Enabled    bool      `json:"enabled"`
-    CreatedAt  time.Time `json:"created_at"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Domain     string    `json:"domain"`
+	PathPrefix string    `json:"path_prefix"`
+	AgentID    string    `json:"agent_id"`
+	UpstreamID string    `json:"upstream_id"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type AgentRouteConfig struct {
-    RouteID     string `json:"route_id"`
-    Name        string `json:"name"`
-    PathPrefix  string `json:"path_prefix"`
-    UpstreamURL string `json:"upstream_url"`
+	RouteID     string `json:"route_id"`
+	Name        string `json:"name"`
+	Domain      string `json:"domain"`
+	PathPrefix  string `json:"path_prefix"`
+	UpstreamURL string `json:"upstream_url"`
 }
 
 type State struct {
@@ -250,7 +252,7 @@ func (s *Store) DeleteUpstream(id string) error {
     return s.saveLocked()
 }
 
-func (s *Store) AddRoute(name, pathPrefix, agentID, upstreamID string) (Route, error) {
+func (s *Store) AddRoute(name, domain, pathPrefix, agentID, upstreamID string) (Route, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -262,23 +264,32 @@ func (s *Store) AddRoute(name, pathPrefix, agentID, upstreamID string) (Route, e
 		return Route{}, errors.New("upstream not found")
 	}
 
+	domain = normalizeDomain(domain)
 	pathPrefix = normalizePathPrefix(pathPrefix)
 	if pathPrefix == "" {
-		pathPrefix = s.autoPathPrefixLocked(agentID, upstream)
-	}
-
-	for _, r := range s.data.Routes {
-		if r.AgentID == agentID && r.PathPrefix == pathPrefix {
-			return Route{}, errors.New("path_prefix already exists for this agent")
+		if domain != "" {
+			pathPrefix = "/"
+		} else {
+			pathPrefix = s.autoPathPrefixLocked(agentID, upstream)
 		}
 	}
 
-    r := Route{
-        ID:         newID("rt"),
-        Name:       strings.TrimSpace(name),
-        PathPrefix: pathPrefix,
-        AgentID:    agentID,
-        UpstreamID: upstreamID,
+	for _, r := range s.data.Routes {
+		if r.AgentID == agentID && r.PathPrefix == pathPrefix && r.Domain == domain {
+			return Route{}, errors.New("path_prefix already exists for this agent")
+		}
+		if domain != "" && r.AgentID == agentID && r.Domain == domain {
+			return Route{}, errors.New("domain already exists for this agent")
+		}
+	}
+
+	r := Route{
+		ID:         newID("rt"),
+		Name:       strings.TrimSpace(name),
+		Domain:     domain,
+		PathPrefix: pathPrefix,
+		AgentID:    agentID,
+		UpstreamID: upstreamID,
         Enabled:    true,
         CreatedAt:  time.Now().UTC(),
     }
@@ -332,13 +343,14 @@ func (s *Store) AgentConfig(agentID, token string) ([]AgentRouteConfig, error) {
         if !ok {
             continue
         }
-        out = append(out, AgentRouteConfig{
-            RouteID:     r.ID,
-            Name:        r.Name,
-            PathPrefix:  r.PathPrefix,
-            UpstreamURL: u.BaseURL,
-        })
-    }
+		out = append(out, AgentRouteConfig{
+			RouteID:     r.ID,
+			Name:        r.Name,
+			Domain:      r.Domain,
+			PathPrefix:  r.PathPrefix,
+			UpstreamURL: u.BaseURL,
+		})
+	}
 
     sort.Slice(out, func(i, j int) bool { return len(out[i].PathPrefix) > len(out[j].PathPrefix) })
     return out, nil
@@ -415,6 +427,17 @@ func normalizePathPrefix(v string) string {
 func normalizeURL(v string) string {
 	v = strings.TrimSpace(v)
 	return strings.TrimRight(v, "/")
+}
+
+func normalizeDomain(v string) string {
+	v = strings.TrimSpace(strings.ToLower(v))
+	v = strings.TrimPrefix(v, "http://")
+	v = strings.TrimPrefix(v, "https://")
+	v = strings.TrimSuffix(v, "/")
+	if strings.Contains(v, "/") {
+		v = strings.Split(v, "/")[0]
+	}
+	return v
 }
 
 var nonWordPattern = regexp.MustCompile(`[^a-z0-9]+`)
