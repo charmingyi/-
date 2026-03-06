@@ -100,7 +100,7 @@ function renderUpstreams() {
       <div class="item">
         <div>
           <b>${u.name}</b>
-          <small>${u.base_url}</small>
+          <small>${u.base_url}${u.insecure_tls ? " | insecure-tls" : ""}</small>
         </div>
         <div></div><div></div>
         <button class="danger" onclick="delUpstream('${u.id}')">删除</button>
@@ -219,6 +219,7 @@ $("#upstreamForm").addEventListener("submit", async (e) => {
   const scheme = String(f.get("scheme") || "https").trim();
   const portRaw = Number(f.get("port"));
   const port = Number.isFinite(portRaw) && portRaw > 0 ? portRaw : (scheme === "https" ? 443 : 80);
+  const insecureTLS = f.get("insecure_tls") === "on";
   await api("/api/upstreams", {
     method: "POST",
     body: JSON.stringify({
@@ -226,6 +227,7 @@ $("#upstreamForm").addEventListener("submit", async (e) => {
       scheme,
       host: String(f.get("host") || "").trim(),
       port,
+      insecure_tls: insecureTLS,
     }),
   });
   e.target.reset();

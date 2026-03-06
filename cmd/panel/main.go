@@ -173,6 +173,7 @@ func (s *server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 		Host    string `json:"host"`
 		Port    int    `json:"port"`
 		Scheme  string `json:"scheme"`
+		InsecureTLS bool `json:"insecure_tls"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -198,7 +199,7 @@ func (s *server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	u, err := s.store.AddUpstream(in.Name, baseURL)
+	u, err := s.store.AddUpstream(in.Name, baseURL, in.InsecureTLS)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return

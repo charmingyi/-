@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Emby Relay Hub</title>
-  <link rel="stylesheet" href="/static/web/style.css?v=20260306e" />
+  <link rel="stylesheet" href="/static/web/style.css?v=20260307a" />
 </head>
 <body>
   <main class="container">
@@ -38,6 +38,7 @@
           </select>
           <input name="host" placeholder="Public IP / Domain" required />
           <input name="port" type="number" min="1" max="65535" placeholder="Port" required />
+          <label class="check"><input type="checkbox" name="insecure_tls" /> Skip TLS Verify</label>
           <button type="submit">Create Upstream</button>
         </form>
         <div id="upstreamList"></div>
@@ -61,6 +62,6 @@
     </section>
   </main>
 
-  <script src="/static/web/app.js?v=20260306e"></script>
+  <script src="/static/web/app.js?v=20260307a"></script>
 </body>
 </html>

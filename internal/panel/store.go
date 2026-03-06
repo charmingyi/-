@@ -24,10 +24,11 @@ type Agent struct {
 }
 
 type Upstream struct {
-    ID        string    `json:"id"`
-    Name      string    `json:"name"`
-    BaseURL   string    `json:"base_url"`
-    CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	BaseURL   string    `json:"base_url"`
+	InsecureTLS bool    `json:"insecure_tls"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Route struct {
@@ -47,6 +48,7 @@ type AgentRouteConfig struct {
 	Domain      string `json:"domain"`
 	PathPrefix  string `json:"path_prefix"`
 	UpstreamURL string `json:"upstream_url"`
+	InsecureTLS bool   `json:"insecure_tls"`
 }
 
 type State struct {
@@ -202,16 +204,17 @@ func (s *Store) ResetAgentToken(id string) (Agent, error) {
     return Agent{}, errors.New("agent not found")
 }
 
-func (s *Store) AddUpstream(name, baseURL string) (Upstream, error) {
-    s.mu.Lock()
-    defer s.mu.Unlock()
+func (s *Store) AddUpstream(name, baseURL string, insecureTLS bool) (Upstream, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-    u := Upstream{
-        ID:        newID("up"),
-        Name:      strings.TrimSpace(name),
-        BaseURL:   normalizeURL(baseURL),
-        CreatedAt: time.Now().UTC(),
-    }
+	u := Upstream{
+		ID:        newID("up"),
+		Name:      strings.TrimSpace(name),
+		BaseURL:   normalizeURL(baseURL),
+		InsecureTLS: insecureTLS,
+		CreatedAt: time.Now().UTC(),
+	}
     if u.Name == "" {
         return Upstream{}, errors.New("upstream name is required")
     }
@@ -349,6 +352,7 @@ func (s *Store) AgentConfig(agentID, token string) ([]AgentRouteConfig, error) {
 			Domain:      r.Domain,
 			PathPrefix:  r.PathPrefix,
 			UpstreamURL: u.BaseURL,
+			InsecureTLS: u.InsecureTLS,
 		})
 	}
 

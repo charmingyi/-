@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"log"
@@ -21,6 +22,7 @@ type routeCfg struct {
 	Domain      string `json:"domain"`
 	PathPrefix  string `json:"path_prefix"`
 	UpstreamURL string `json:"upstream_url"`
+	InsecureTLS bool   `json:"insecure_tls"`
 }
 
 type configResp struct {
@@ -141,6 +143,16 @@ func syncConfig(panelURL, agentID, token string, s *routerState) error {
 		prefixCopy := normalizePrefix(rc.PathPrefix)
 		domainCopy := normalizeHost(rc.Domain)
 		proxy := httputil.NewSingleHostReverseProxy(&upCopy)
+		if rc.InsecureTLS {
+			if baseTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+				t := baseTransport.Clone()
+				if t.TLSClientConfig == nil {
+					t.TLSClientConfig = &tls.Config{}
+				}
+				t.TLSClientConfig.InsecureSkipVerify = true
+				proxy.Transport = t
+			}
+		}
 		original := proxy.Director
 		proxy.Director = func(req *http.Request) {
 			original(req)
