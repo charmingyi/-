@@ -579,8 +579,11 @@ func detectEmbyResponse(resp *http.Response) (bool, string) {
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	server := strings.ToLower(resp.Header.Get("Server"))
 	location := strings.ToLower(resp.Header.Get("Location"))
-	if strings.Contains(server, "emby") || strings.Contains(location, "/web/index.html") {
+	if strings.Contains(server, "emby") {
 		return true, "Emby response headers detected"
+	}
+	if strings.Contains(location, "/web/index.html") && strings.Contains(location, "startup") {
+		return true, "Emby redirect detected"
 	}
 	if strings.Contains(ct, "application/json") {
 		var payload map[string]any
@@ -600,12 +603,12 @@ func detectEmbyResponse(resp *http.Response) (bool, string) {
 	}
 	bs := strings.ToLower(string(body))
 	switch {
-	case strings.Contains(bs, "emby"):
-		return true, "Emby web detected"
 	case strings.Contains(bs, "manuallogin.html"):
 		return true, "Emby login page detected"
 	case strings.Contains(bs, "serverid=") && strings.Contains(bs, "startup"):
 		return true, "Emby startup page detected"
+	case strings.Contains(bs, "emby") && (strings.Contains(bs, "serverid=") || strings.Contains(bs, "startup/") || strings.Contains(bs, "manuallogin") || strings.Contains(bs, "emby-webcomponents")):
+		return true, "Emby web detected"
 	default:
 		return false, ""
 	}
