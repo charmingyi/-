@@ -10,6 +10,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
     "emby-proxy-hub/internal/panel"
 )
@@ -21,9 +23,11 @@ var webFS embed.FS
 var installScript string
 
 type server struct {
-    store      *panel.Store
-    adminToken string
-    panelURL   string
+	store      *panel.Store
+	adminToken string
+	panelURL   string
+	hbMu       sync.RWMutex
+	lastSeen   map[string]time.Time
 }
 
 func main() {
@@ -35,11 +39,12 @@ func main() {
         log.Fatalf("load store: %v", err)
     }
 
-    s := &server{
-        store:      st,
-        adminToken: strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
-        panelURL:   strings.TrimRight(getEnv("PANEL_PUBLIC_URL", "http://127.0.0.1:18473"), "/"),
-    }
+	s := &server{
+		store:      st,
+		adminToken: strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
+		panelURL:   strings.TrimRight(getEnv("PANEL_PUBLIC_URL", "http://127.0.0.1:18473"), "/"),
+		lastSeen:   map[string]time.Time{},
+	}
 
     mux := http.NewServeMux()
     mux.HandleFunc("/", s.handleIndex)
@@ -50,8 +55,9 @@ func main() {
     mux.HandleFunc("/api/upstreams/", s.auth(s.handleUpstreamByID))
     mux.HandleFunc("/api/routes", s.auth(s.handleRoutes))
     mux.HandleFunc("/api/routes/", s.auth(s.handleRouteByID))
-    mux.HandleFunc("/api/agent/install-command", s.auth(s.handleAgentInstallCommand))
+	mux.HandleFunc("/api/agent/install-command", s.auth(s.handleAgentInstallCommand))
 	mux.HandleFunc("/api/agent/config", s.handleAgentConfig)
+	mux.HandleFunc("/api/agent/heartbeat", s.handleAgentHeartbeat)
 	mux.HandleFunc("/install/agent-menu.sh", s.handleInstallScript)
 	mux.Handle("/downloads/", s.noCache(http.StripPrefix("/downloads/", http.FileServer(http.Dir("./releases")))))
 	mux.Handle("/static/", s.noCache(http.StripPrefix("/static/", http.FileServer(http.FS(webFS)))))
@@ -77,7 +83,33 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
-    writeJSON(w, http.StatusOK, s.store.Snapshot())
+	snap := s.store.Snapshot()
+
+	type agentView struct {
+		panel.Agent
+		Online   bool   `json:"online"`
+		LastSeen string `json:"last_seen"`
+	}
+
+	now := time.Now()
+	agents := make([]agentView, 0, len(snap.Agents))
+	for _, a := range snap.Agents {
+		last, ok := s.getLastSeen(a.ID)
+		v := agentView{Agent: a, Online: false, LastSeen: ""}
+		if ok {
+			v.LastSeen = last.Format(time.RFC3339)
+			if now.Sub(last) <= 75*time.Second {
+				v.Online = true
+			}
+		}
+		agents = append(agents, v)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agents":    agents,
+		"upstreams": snap.Upstreams,
+		"routes":    snap.Routes,
+	})
 }
 
 func (s *server) handleAgents(w http.ResponseWriter, r *http.Request) {
@@ -216,17 +248,34 @@ func (s *server) handleRouteByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
-    agentID := r.URL.Query().Get("agent_id")
-    token := r.URL.Query().Get("token")
-    cfg, err := s.store.AgentConfig(agentID, token)
+	agentID := r.URL.Query().Get("agent_id")
+	token := r.URL.Query().Get("token")
+	cfg, err := s.store.AgentConfig(agentID, token)
     if err != nil {
         writeErr(w, http.StatusUnauthorized, err)
         return
     }
-    writeJSON(w, http.StatusOK, map[string]any{
-        "agent_id": agentID,
-        "routes":   cfg,
-    })
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agent_id": agentID,
+		"routes":   cfg,
+	})
+}
+
+func (s *server) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	agentID := r.URL.Query().Get("agent_id")
+	token := r.URL.Query().Get("token")
+	if !s.store.ValidateAgent(agentID, token) {
+		writeErr(w, http.StatusUnauthorized, fmt.Errorf("unauthorized"))
+		return
+	}
+	s.hbMu.Lock()
+	s.lastSeen[agentID] = time.Now()
+	s.hbMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *server) handleAgentInstallCommand(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +301,13 @@ func (s *server) noCache(next http.Handler) http.Handler {
 		w.Header().Set("Expires", "0")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *server) getLastSeen(agentID string) (time.Time, bool) {
+	s.hbMu.RLock()
+	defer s.hbMu.RUnlock()
+	t, ok := s.lastSeen[agentID]
+	return t, ok
 }
 
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {

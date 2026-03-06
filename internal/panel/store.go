@@ -386,9 +386,15 @@ func (s *Store) validAgentTokenLocked(id, token string) bool {
 	for _, a := range s.data.Agents {
 		if a.ID == id && a.Token == token {
 			return true
-        }
-    }
-    return false
+		}
+	}
+	return false
+}
+
+func (s *Store) ValidateAgent(agentID, token string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.validAgentTokenLocked(agentID, token)
 }
 
 func normalizePathPrefix(v string) string {

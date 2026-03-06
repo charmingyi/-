@@ -10,24 +10,20 @@ function safeArray(v) {
   return Array.isArray(v) ? v : [];
 }
 
-function getHeaders() {
+function headers() {
   const token = localStorage.getItem("admin_token") || "";
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers["X-Admin-Token"] = token;
-  return headers;
+  const h = { "Content-Type": "application/json" };
+  if (token) h["X-Admin-Token"] = token;
+  return h;
 }
 
-function showError(e) {
-  alert(e?.error || e?.message || String(e));
-}
-
-async function api(path, opt = {}) {
+async function api(path, options = {}) {
   const resp = await fetch(path, {
-    ...opt,
-    headers: { ...getHeaders(), ...(opt.headers || {}) },
+    ...options,
+    headers: { ...headers(), ...(options.headers || {}) },
   });
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw data;
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
   return data;
 }
 
@@ -35,49 +31,55 @@ function panelBase() {
   return `${window.location.protocol}//${window.location.host}`;
 }
 
-function agentMenuCommand(agent) {
+function cmdInstall(agent) {
   const base = panelBase();
   return `curl -fsSL ${base}/install/agent-menu.sh | sudo env PANEL_URL='${base}' AGENT_ID='${agent.id}' AGENT_TOKEN='${agent.token}' bash -s -- menu`;
 }
 
-function agentUninstallCommand() {
+function cmdUninstall() {
   const base = panelBase();
   return `curl -fsSL ${base}/install/agent-menu.sh | sudo bash -s -- uninstall`;
 }
 
-async function copyText(text) {
+async function copyCommand(text) {
   commandBox.value = text;
   try {
     await navigator.clipboard.writeText(text);
   } catch (_e) {}
 }
 
+function statusLabel(agent) {
+  if (agent.online) return "ONLINE";
+  if (agent.last_seen) return "OFFLINE";
+  return "NEVER";
+}
+
+function statusClass(agent) {
+  if (agent.online) return "online";
+  if (agent.last_seen) return "offline";
+  return "never";
+}
+
 function renderAgents() {
   const agents = safeArray(state.agents);
-  const box = $("#agentList");
+  const host = $("#agentList");
 
-  box.innerHTML =
+  host.innerHTML =
     '<div class="list">' +
     agents
       .map((a) => {
-        const menuCmd = agentMenuCommand(a);
-        const uninstallCmd = agentUninstallCommand();
         return `
           <div class="item item-agent">
             <div class="item-main">
-              <b>${a.name}</b>
-              <small>${a.host || "未填写地址"} | ${a.id}</small>
-              <div class="cmd-row">
-                <label>对接菜单命令</label>
-                <code>${menuCmd}</code>
+              <div class="title-row">
+                <b>${a.name}</b>
+                <span class="badge ${statusClass(a)}">${statusLabel(a)}</span>
               </div>
-              <div class="cmd-row">
-                <label>卸载命令</label>
-                <code>${uninstallCmd}</code>
-              </div>
+              <small>${a.host || "-"} | ${a.id}</small>
+              <small>Last seen: ${a.last_seen || "-"}</small>
             </div>
-            <button onclick="copyAgentMenuCmd('${a.id}')">复制对接命令</button>
-            <button onclick="copyAgentUninstallCmd()">复制卸载命令</button>
+            <button onclick="copyAgentInstall('${a.id}')">复制对接命令</button>
+            <button onclick="copyAgentUninstall()">复制卸载命令</button>
             <button onclick="resetToken('${a.id}')">重置Token</button>
             <button class="danger" onclick="delAgent('${a.id}')">删除</button>
           </div>
@@ -89,19 +91,21 @@ function renderAgents() {
 
 function renderUpstreams() {
   const upstreams = safeArray(state.upstreams);
-  const box = $("#upstreamList");
-
-  box.innerHTML =
+  const host = $("#upstreamList");
+  host.innerHTML =
     '<div class="list">' +
     upstreams
       .map(
         (u) => `
-          <div class="item">
-            <div><b>${u.name}</b><small>${u.base_url}</small></div>
-            <div></div><div></div>
-            <button class="danger" onclick="delUpstream('${u.id}')">删除</button>
-          </div>
-        `
+      <div class="item">
+        <div>
+          <b>${u.name}</b>
+          <small>${u.base_url}</small>
+        </div>
+        <div></div><div></div>
+        <button class="danger" onclick="delUpstream('${u.id}')">删除</button>
+      </div>
+    `
       )
       .join("") +
     "</div>";
@@ -113,46 +117,43 @@ function renderRoutes() {
   const upstreams = safeArray(state.upstreams);
   const aMap = Object.fromEntries(agents.map((a) => [a.id, a.name]));
   const uMap = Object.fromEntries(upstreams.map((u) => [u.id, u.name]));
-  const box = $("#routeList");
+  const host = $("#routeList");
 
-  box.innerHTML =
+  host.innerHTML =
     '<div class="list">' +
     routes
       .map(
         (r) => `
-          <div class="item">
-            <div>
-              <b>${aMap[r.agent_id] || r.agent_id} -> ${uMap[r.upstream_id] || r.upstream_id}</b>
-              <small>访问路径：${r.path_prefix}</small>
-            </div>
-            <div></div><div></div>
-            <button class="danger" onclick="delRoute('${r.id}')">删除</button>
-          </div>
-        `
+      <div class="item">
+        <div>
+          <b>${aMap[r.agent_id] || r.agent_id} -> ${uMap[r.upstream_id] || r.upstream_id}</b>
+          <small>Path: ${r.path_prefix}</small>
+        </div>
+        <div></div><div></div>
+        <button class="danger" onclick="delRoute('${r.id}')">删除</button>
+      </div>
+    `
       )
       .join("") +
     "</div>";
 }
 
-function renderBindSelects() {
+function renderBinds() {
   const agents = safeArray(state.agents);
   const upstreams = safeArray(state.upstreams);
   $("#bindAgent").innerHTML =
     `<option value="">选择 Agent</option>` +
     agents.map((a) => `<option value="${a.id}">${a.name}</option>`).join("");
   $("#bindUpstream").innerHTML =
-    `<option value="">选择 Emby 源站</option>` +
+    `<option value="">选择 Emby</option>` +
     upstreams.map((u) => `<option value="${u.id}">${u.name}</option>`).join("");
 }
 
 function render() {
-  state.agents = safeArray(state.agents);
-  state.upstreams = safeArray(state.upstreams);
-  state.routes = safeArray(state.routes);
   renderAgents();
   renderUpstreams();
   renderRoutes();
-  renderBindSelects();
+  renderBinds();
 }
 
 async function loadState() {
@@ -165,18 +166,18 @@ async function loadState() {
   render();
 }
 
-window.copyAgentMenuCmd = async (id) => {
-  const a = safeArray(state.agents).find((v) => v.id === id);
-  if (!a) return;
-  await copyText(agentMenuCommand(a));
+window.copyAgentInstall = async (id) => {
+  const agent = safeArray(state.agents).find((a) => a.id === id);
+  if (!agent) return;
+  await copyCommand(cmdInstall(agent));
 };
 
-window.copyAgentUninstallCmd = async () => {
-  await copyText(agentUninstallCommand());
+window.copyAgentUninstall = async () => {
+  await copyCommand(cmdUninstall());
 };
 
 window.delAgent = async (id) => {
-  if (!confirm("确认删除 Agent？")) return;
+  if (!confirm("Delete this agent?")) return;
   await api(`/api/agents/${id}`, { method: "DELETE" });
   await loadState();
 };
@@ -187,25 +188,25 @@ window.resetToken = async (id) => {
 };
 
 window.delUpstream = async (id) => {
-  if (!confirm("确认删除源站？")) return;
+  if (!confirm("Delete this upstream?")) return;
   await api(`/api/upstreams/${id}`, { method: "DELETE" });
   await loadState();
 };
 
 window.delRoute = async (id) => {
-  if (!confirm("确认删除绑定？")) return;
+  if (!confirm("Delete this binding?")) return;
   await api(`/api/routes/${id}`, { method: "DELETE" });
   await loadState();
 };
 
 $("#agentForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const form = new FormData(e.target);
+  const f = new FormData(e.target);
   await api("/api/agents", {
     method: "POST",
     body: JSON.stringify({
-      name: (form.get("name") || "").toString().trim(),
-      host: (form.get("host") || "").toString().trim(),
+      name: String(f.get("name") || "").trim(),
+      host: String(f.get("host") || "").trim(),
     }),
   });
   e.target.reset();
@@ -214,13 +215,13 @@ $("#agentForm").addEventListener("submit", async (e) => {
 
 $("#upstreamForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const form = new FormData(e.target);
+  const f = new FormData(e.target);
   await api("/api/upstreams", {
     method: "POST",
     body: JSON.stringify({
-      name: (form.get("name") || "").toString().trim(),
-      host: (form.get("host") || "").toString().trim(),
-      port: Number(form.get("port")),
+      name: String(f.get("name") || "").trim(),
+      host: String(f.get("host") || "").trim(),
+      port: Number(f.get("port")),
       scheme: "http",
     }),
   });
@@ -230,20 +231,20 @@ $("#upstreamForm").addEventListener("submit", async (e) => {
 
 $("#bindForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const form = new FormData(e.target);
-  const agentId = (form.get("agent_id") || "").toString();
-  const upstreamId = (form.get("upstream_id") || "").toString();
-  if (!agentId || !upstreamId) {
-    alert("请先选择 Agent 和 Emby 源站");
+  const f = new FormData(e.target);
+  const agentID = String(f.get("agent_id") || "");
+  const upstreamID = String(f.get("upstream_id") || "");
+  if (!agentID || !upstreamID) {
+    alert("请先选择 Agent 和 Emby");
     return;
   }
   await api("/api/routes", {
     method: "POST",
     body: JSON.stringify({
-      agent_id: agentId,
-      upstream_id: upstreamId,
       name: "",
       path_prefix: "",
+      agent_id: agentID,
+      upstream_id: upstreamID,
     }),
   });
   await loadState();
@@ -251,10 +252,10 @@ $("#bindForm").addEventListener("submit", async (e) => {
 
 tokenBtn.addEventListener("click", () => {
   localStorage.setItem("admin_token", tokenInput.value.trim());
-  loadState().catch(showError);
+  loadState().catch((e) => alert(e.message || String(e)));
 });
 
 (async () => {
   tokenInput.value = localStorage.getItem("admin_token") || "";
   await loadState();
-})().catch(showError);
+})().catch((e) => alert(e.message || String(e)));

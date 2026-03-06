@@ -49,20 +49,24 @@ func main() {
     }
     panelURL = strings.TrimRight(panelURL, "/")
 
-    state := &routerState{}
-    if err := syncConfig(panelURL, agentID, token, state); err != nil {
-        log.Printf("initial sync failed: %v", err)
-    }
+	state := &routerState{}
+	if err := syncConfig(panelURL, agentID, token, state); err != nil {
+		log.Printf("initial sync failed: %v", err)
+	}
+	_ = sendHeartbeat(panelURL, agentID, token)
 
     go func() {
-        ticker := time.NewTicker(syncInterval)
-        defer ticker.Stop()
-        for range ticker.C {
-            if err := syncConfig(panelURL, agentID, token, state); err != nil {
-                log.Printf("sync failed: %v", err)
-            }
-        }
-    }()
+		ticker := time.NewTicker(syncInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := syncConfig(panelURL, agentID, token, state); err != nil {
+				log.Printf("sync failed: %v", err)
+			}
+			if err := sendHeartbeat(panelURL, agentID, token); err != nil {
+				log.Printf("heartbeat failed: %v", err)
+			}
+		}
+	}()
 
     mux := http.NewServeMux()
     mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
@@ -232,6 +236,21 @@ func envDuration(k string, d time.Duration) time.Duration {
     if v < 5*time.Second {
         return 5 * time.Second
     }
-    return v
+	return v
+}
+
+func sendHeartbeat(panelURL, agentID, token string) error {
+	endpoint := panelURL + "/api/agent/heartbeat?agent_id=" + url.QueryEscape(agentID) + "&token=" + url.QueryEscape(token)
+	req, _ := http.NewRequest(http.MethodPost, endpoint, nil)
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return &statusErr{StatusCode: resp.StatusCode, Body: string(b)}
+	}
+	return nil
 }
 

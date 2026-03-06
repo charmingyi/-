@@ -4,61 +4,59 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Emby Relay Hub</title>
-  <link rel="stylesheet" href="/static/web/style.css?v=20260306c" />
+  <link rel="stylesheet" href="/static/web/style.css?v=20260306d" />
 </head>
 <body>
-  <div class="bg-shape s1"></div>
-  <div class="bg-shape s2"></div>
-
   <main class="container">
     <header class="hero">
       <h1>Emby Relay Hub</h1>
-      <p>三步完成：节点 -> 源站 -> 绑定反代</p>
+      <p>3 steps: Agent -> Emby -> Bind. Token and commands are handled by panel.</p>
       <div class="token">
-        <input id="adminToken" placeholder="可选：ADMIN_TOKEN" />
-        <button id="saveToken">保存令牌</button>
+        <input id="adminToken" placeholder="Optional: ADMIN_TOKEN" />
+        <button id="saveToken">Save Token</button>
       </div>
     </header>
 
     <section class="grid">
       <article class="card">
-        <h2>1. 添加 Agent 节点</h2>
+        <h2>1) Add Agent</h2>
         <form id="agentForm">
-          <input name="name" placeholder="节点名称（如 HK-01）" required />
-          <input name="host" placeholder="公网地址（如 1.2.3.4）" required />
-          <button type="submit">新增 Agent</button>
+          <input name="name" placeholder="Agent name (e.g. HK-01)" required />
+          <input name="host" placeholder="Public IP / Domain" required />
+          <button type="submit">Create Agent</button>
         </form>
         <div id="agentList"></div>
       </article>
 
       <article class="card">
-        <h2>2. 添加 Emby 源站</h2>
+        <h2>2) Add Emby Upstream</h2>
         <form id="upstreamForm" class="row3">
-          <input name="name" placeholder="源站名称（如 家宽A）" required />
-          <input name="host" placeholder="公网地址（如 8.8.8.8）" required />
-          <input name="port" type="number" min="1" max="65535" placeholder="端口（如 8096）" required />
-          <button type="submit">新增源站</button>
+          <input name="name" placeholder="Upstream name" required />
+          <input name="host" placeholder="Public IP / Domain" required />
+          <input name="port" type="number" min="1" max="65535" placeholder="Port" required />
+          <button type="submit">Create Upstream</button>
         </form>
         <div id="upstreamList"></div>
       </article>
 
       <article class="card wide">
-        <h2>3. 绑定反代（选 Agent -> 选 Emby）</h2>
+        <h2>3) Bind Agent -> Emby</h2>
         <form id="bindForm" class="row3">
-          <select name="agent_id" id="bindAgent" required></select>
-          <select name="upstream_id" id="bindUpstream" required></select>
-          <button type="submit">创建绑定</button>
+          <select id="bindAgent" name="agent_id" required></select>
+          <select id="bindUpstream" name="upstream_id" required></select>
+          <div></div>
+          <button type="submit">Create Binding</button>
         </form>
         <div id="routeList"></div>
       </article>
     </section>
 
     <section class="card">
-      <h2>命令输出</h2>
+      <h2>Command Output</h2>
       <textarea id="commandBox" rows="4" readonly></textarea>
     </section>
   </main>
 
-  <script src="/static/web/app.js?v=20260306c"></script>
+  <script src="/static/web/app.js?v=20260306d"></script>
 </body>
 </html>
