@@ -1,16 +1,18 @@
 package panel
 
 import (
-    "crypto/rand"
-    "encoding/hex"
-    "encoding/json"
-    "errors"
-    "os"
-    "path/filepath"
-    "sort"
-    "strings"
-    "sync"
-    "time"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 type Agent struct {
@@ -249,25 +251,27 @@ func (s *Store) DeleteUpstream(id string) error {
 }
 
 func (s *Store) AddRoute(name, pathPrefix, agentID, upstreamID string) (Route, error) {
-    s.mu.Lock()
-    defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-    pathPrefix = normalizePathPrefix(pathPrefix)
-    if pathPrefix == "" {
-        return Route{}, errors.New("path_prefix is required")
-    }
-    if !s.hasAgentLocked(agentID) {
-        return Route{}, errors.New("agent not found")
-    }
-    if !s.hasUpstreamLocked(upstreamID) {
-        return Route{}, errors.New("upstream not found")
-    }
+	if !s.hasAgentLocked(agentID) {
+		return Route{}, errors.New("agent not found")
+	}
+	upstream, ok := s.getUpstreamLocked(upstreamID)
+	if !ok {
+		return Route{}, errors.New("upstream not found")
+	}
 
-    for _, r := range s.data.Routes {
-        if r.AgentID == agentID && r.PathPrefix == pathPrefix {
-            return Route{}, errors.New("path_prefix already exists for this agent")
-        }
-    }
+	pathPrefix = normalizePathPrefix(pathPrefix)
+	if pathPrefix == "" {
+		pathPrefix = s.autoPathPrefixLocked(agentID, upstream)
+	}
+
+	for _, r := range s.data.Routes {
+		if r.AgentID == agentID && r.PathPrefix == pathPrefix {
+			return Route{}, errors.New("path_prefix already exists for this agent")
+		}
+	}
 
     r := Route{
         ID:         newID("rt"),
@@ -361,18 +365,27 @@ func (s *Store) hasAgentLocked(id string) bool {
 }
 
 func (s *Store) hasUpstreamLocked(id string) bool {
-    for _, u := range s.data.Upstreams {
-        if u.ID == id {
-            return true
-        }
-    }
-    return false
+	for _, u := range s.data.Upstreams {
+		if u.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) getUpstreamLocked(id string) (Upstream, bool) {
+	for _, u := range s.data.Upstreams {
+		if u.ID == id {
+			return u, true
+		}
+	}
+	return Upstream{}, false
 }
 
 func (s *Store) validAgentTokenLocked(id, token string) bool {
-    for _, a := range s.data.Agents {
-        if a.ID == id && a.Token == token {
-            return true
+	for _, a := range s.data.Agents {
+		if a.ID == id && a.Token == token {
+			return true
         }
     }
     return false
@@ -394,12 +407,48 @@ func normalizePathPrefix(v string) string {
 }
 
 func normalizeURL(v string) string {
-    v = strings.TrimSpace(v)
-    return strings.TrimRight(v, "/")
+	v = strings.TrimSpace(v)
+	return strings.TrimRight(v, "/")
+}
+
+var nonWordPattern = regexp.MustCompile(`[^a-z0-9]+`)
+
+func toSlug(v string) string {
+	v = strings.TrimSpace(strings.ToLower(v))
+	v = nonWordPattern.ReplaceAllString(v, "-")
+	v = strings.Trim(v, "-")
+	if v == "" {
+		return "emby"
+	}
+	return v
+}
+
+func (s *Store) autoPathPrefixLocked(agentID string, upstream Upstream) string {
+	base := "/" + toSlug(upstream.Name)
+	if base == "/" {
+		base = "/emby"
+	}
+
+	candidate := base
+	i := 2
+	for s.pathExistsForAgentLocked(agentID, candidate) {
+		candidate = base + "-" + strconv.Itoa(i)
+		i++
+	}
+	return candidate
+}
+
+func (s *Store) pathExistsForAgentLocked(agentID, pathPrefix string) bool {
+	for _, r := range s.data.Routes {
+		if r.AgentID == agentID && r.PathPrefix == pathPrefix {
+			return true
+		}
+	}
+	return false
 }
 
 func newID(prefix string) string {
-    return prefix + "_" + randomHex(8)
+	return prefix + "_" + randomHex(8)
 }
 
 func randomHex(n int) string {

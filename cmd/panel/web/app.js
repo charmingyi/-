@@ -46,15 +46,17 @@ function agentUninstallCommand() {
 }
 
 async function copyText(text) {
-  await navigator.clipboard.writeText(text);
   commandBox.value = text;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_e) {}
 }
 
 function renderAgents() {
-  const list = $("#agentList");
   const agents = safeArray(state.agents);
+  const box = $("#agentList");
 
-  list.innerHTML =
+  box.innerHTML =
     '<div class="list">' +
     agents
       .map((a) => {
@@ -64,7 +66,7 @@ function renderAgents() {
           <div class="item item-agent">
             <div class="item-main">
               <b>${a.name}</b>
-              <small>${a.id} | ${a.host || "未填写地址"}</small>
+              <small>${a.host || "未填写地址"} | ${a.id}</small>
               <div class="cmd-row">
                 <label>对接菜单命令</label>
                 <code>${menuCmd}</code>
@@ -75,7 +77,7 @@ function renderAgents() {
               </div>
             </div>
             <button onclick="copyAgentMenuCmd('${a.id}')">复制对接命令</button>
-            <button onclick="copyAgentUninstallCmd('${a.id}')">复制卸载命令</button>
+            <button onclick="copyAgentUninstallCmd()">复制卸载命令</button>
             <button onclick="resetToken('${a.id}')">重置Token</button>
             <button class="danger" onclick="delAgent('${a.id}')">删除</button>
           </div>
@@ -86,10 +88,10 @@ function renderAgents() {
 }
 
 function renderUpstreams() {
-  const list = $("#upstreamList");
   const upstreams = safeArray(state.upstreams);
+  const box = $("#upstreamList");
 
-  list.innerHTML =
+  box.innerHTML =
     '<div class="list">' +
     upstreams
       .map(
@@ -106,23 +108,22 @@ function renderUpstreams() {
 }
 
 function renderRoutes() {
-  const list = $("#routeList");
   const routes = safeArray(state.routes);
   const agents = safeArray(state.agents);
   const upstreams = safeArray(state.upstreams);
+  const aMap = Object.fromEntries(agents.map((a) => [a.id, a.name]));
+  const uMap = Object.fromEntries(upstreams.map((u) => [u.id, u.name]));
+  const box = $("#routeList");
 
-  const agentName = Object.fromEntries(agents.map((a) => [a.id, a.name]));
-  const upstreamName = Object.fromEntries(upstreams.map((u) => [u.id, u.name]));
-
-  list.innerHTML =
+  box.innerHTML =
     '<div class="list">' +
     routes
       .map(
         (r) => `
           <div class="item">
             <div>
-              <b>${r.name}</b>
-              <small>${r.path_prefix} -> ${upstreamName[r.upstream_id] || r.upstream_id} @ ${agentName[r.agent_id] || r.agent_id}</small>
+              <b>${aMap[r.agent_id] || r.agent_id} -> ${uMap[r.upstream_id] || r.upstream_id}</b>
+              <small>访问路径：${r.path_prefix}</small>
             </div>
             <div></div><div></div>
             <button class="danger" onclick="delRoute('${r.id}')">删除</button>
@@ -133,15 +134,15 @@ function renderRoutes() {
     "</div>";
 }
 
-function renderSelects() {
+function renderBindSelects() {
   const agents = safeArray(state.agents);
   const upstreams = safeArray(state.upstreams);
-  $("#routeAgent").innerHTML = agents
-    .map((a) => `<option value="${a.id}">${a.name} (${a.id})</option>`)
-    .join("");
-  $("#routeUpstream").innerHTML = upstreams
-    .map((u) => `<option value="${u.id}">${u.name}</option>`)
-    .join("");
+  $("#bindAgent").innerHTML =
+    `<option value="">选择 Agent</option>` +
+    agents.map((a) => `<option value="${a.id}">${a.name}</option>`).join("");
+  $("#bindUpstream").innerHTML =
+    `<option value="">选择 Emby 源站</option>` +
+    upstreams.map((u) => `<option value="${u.id}">${u.name}</option>`).join("");
 }
 
 function render() {
@@ -151,18 +152,28 @@ function render() {
   renderAgents();
   renderUpstreams();
   renderRoutes();
-  renderSelects();
+  renderBindSelects();
 }
 
 async function loadState() {
-  const data = await api("/api/state");
+  const s = await api("/api/state");
   state = {
-    agents: safeArray(data.agents),
-    upstreams: safeArray(data.upstreams),
-    routes: safeArray(data.routes),
+    agents: safeArray(s.agents),
+    upstreams: safeArray(s.upstreams),
+    routes: safeArray(s.routes),
   };
   render();
 }
+
+window.copyAgentMenuCmd = async (id) => {
+  const a = safeArray(state.agents).find((v) => v.id === id);
+  if (!a) return;
+  await copyText(agentMenuCommand(a));
+};
+
+window.copyAgentUninstallCmd = async () => {
+  await copyText(agentUninstallCommand());
+};
 
 window.delAgent = async (id) => {
   if (!confirm("确认删除 Agent？")) return;
@@ -182,21 +193,9 @@ window.delUpstream = async (id) => {
 };
 
 window.delRoute = async (id) => {
-  if (!confirm("确认删除规则？")) return;
+  if (!confirm("确认删除绑定？")) return;
   await api(`/api/routes/${id}`, { method: "DELETE" });
   await loadState();
-};
-
-window.copyAgentMenuCmd = async (id) => {
-  const agent = safeArray(state.agents).find((a) => a.id === id);
-  if (!agent) return;
-  await copyText(agentMenuCommand(agent));
-};
-
-window.copyAgentUninstallCmd = async (id) => {
-  const _agent = safeArray(state.agents).find((a) => a.id === id);
-  if (!_agent) return;
-  await copyText(agentUninstallCommand());
 };
 
 $("#agentForm").addEventListener("submit", async (e) => {
@@ -204,7 +203,10 @@ $("#agentForm").addEventListener("submit", async (e) => {
   const form = new FormData(e.target);
   await api("/api/agents", {
     method: "POST",
-    body: JSON.stringify(Object.fromEntries(form.entries())),
+    body: JSON.stringify({
+      name: (form.get("name") || "").toString().trim(),
+      host: (form.get("host") || "").toString().trim(),
+    }),
   });
   e.target.reset();
   await loadState();
@@ -215,20 +217,35 @@ $("#upstreamForm").addEventListener("submit", async (e) => {
   const form = new FormData(e.target);
   await api("/api/upstreams", {
     method: "POST",
-    body: JSON.stringify(Object.fromEntries(form.entries())),
+    body: JSON.stringify({
+      name: (form.get("name") || "").toString().trim(),
+      host: (form.get("host") || "").toString().trim(),
+      port: Number(form.get("port")),
+      scheme: "http",
+    }),
   });
   e.target.reset();
   await loadState();
 });
 
-$("#routeForm").addEventListener("submit", async (e) => {
+$("#bindForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = new FormData(e.target);
+  const agentId = (form.get("agent_id") || "").toString();
+  const upstreamId = (form.get("upstream_id") || "").toString();
+  if (!agentId || !upstreamId) {
+    alert("请先选择 Agent 和 Emby 源站");
+    return;
+  }
   await api("/api/routes", {
     method: "POST",
-    body: JSON.stringify(Object.fromEntries(form.entries())),
+    body: JSON.stringify({
+      agent_id: agentId,
+      upstream_id: upstreamId,
+      name: "",
+      path_prefix: "",
+    }),
   });
-  e.target.reset();
   await loadState();
 });
 

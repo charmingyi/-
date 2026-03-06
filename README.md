@@ -2,14 +2,21 @@
 
 一个用于 Emby 多源站反代分发的控制面板，配套轻量 Agent，适合把非优化线路源站通过优化机中转出去。
 
-## 一键部署（已支持自动补全环境）
+## 一键部署（执行后直接进入菜单）
 直接在服务器执行：
 
 ```bash
 bash <(curl -L -s https://raw.githubusercontent.com/charmingyi/-/codex/create-reverse-proxy-website-for-emby-kzecse/deploy.sh)
 ```
 
-`deploy.sh` 会自动处理：
+会进入菜单，可选：
+- `1) Install`
+- `2) Update`
+- `3) Uninstall`
+- `4) Status`
+- `5) Logs`
+
+脚本会自动处理：
 - 自动安装基础依赖：`curl`、`tar`、`ca-certificates`（缺失时）
 - 自动安装 Go（默认 `1.22.12`，可通过 `GO_VERSION` 覆盖）
 - 自动下载仓库源码并编译 Panel

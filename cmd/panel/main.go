@@ -1,14 +1,15 @@
 package main
 
 import (
-    "embed"
-    "encoding/json"
-    "fmt"
-    "log"
-    "net/http"
-    "os"
-    "path"
-    "strings"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path"
+	"strconv"
+	"strings"
 
     "emby-proxy-hub/internal/panel"
 )
@@ -50,15 +51,15 @@ func main() {
     mux.HandleFunc("/api/routes", s.auth(s.handleRoutes))
     mux.HandleFunc("/api/routes/", s.auth(s.handleRouteByID))
     mux.HandleFunc("/api/agent/install-command", s.auth(s.handleAgentInstallCommand))
-    mux.HandleFunc("/api/agent/config", s.handleAgentConfig)
-    mux.HandleFunc("/install/agent-menu.sh", s.handleInstallScript)
-    mux.Handle("/downloads/", http.StripPrefix("/downloads/", http.FileServer(http.Dir("./releases"))))
-    mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(webFS))))
+	mux.HandleFunc("/api/agent/config", s.handleAgentConfig)
+	mux.HandleFunc("/install/agent-menu.sh", s.handleInstallScript)
+	mux.Handle("/downloads/", s.noCache(http.StripPrefix("/downloads/", http.FileServer(http.Dir("./releases")))))
+	mux.Handle("/static/", s.noCache(http.StripPrefix("/static/", http.FileServer(http.FS(webFS)))))
 
-    log.Printf("panel listening on %s", listen)
-    if err := http.ListenAndServe(listen, logReq(mux)); err != nil {
-        log.Fatal(err)
-    }
+	log.Printf("panel listening on %s", listen)
+	if err := http.ListenAndServe(listen, logReq(s.noCache(mux))); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -133,19 +134,35 @@ func (s *server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
         methodNotAllowed(w)
         return
     }
-    var in struct {
-        Name    string `json:"name"`
-        BaseURL string `json:"base_url"`
-    }
-    if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-        writeErr(w, http.StatusBadRequest, err)
-        return
-    }
-    u, err := s.store.AddUpstream(in.Name, in.BaseURL)
-    if err != nil {
-        writeErr(w, http.StatusBadRequest, err)
-        return
-    }
+	var in struct {
+		Name    string `json:"name"`
+		BaseURL string `json:"base_url"`
+		Host    string `json:"host"`
+		Port    int    `json:"port"`
+		Scheme  string `json:"scheme"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+
+	baseURL := strings.TrimSpace(in.BaseURL)
+	if baseURL == "" {
+		host := strings.TrimSpace(in.Host)
+		if host != "" && in.Port > 0 {
+			scheme := strings.TrimSpace(in.Scheme)
+			if scheme == "" {
+				scheme = "http"
+			}
+			baseURL = scheme + "://" + host + ":" + strconv.Itoa(in.Port)
+		}
+	}
+
+	u, err := s.store.AddUpstream(in.Name, baseURL)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
     writeJSON(w, http.StatusOK, u)
 }
 
@@ -224,8 +241,17 @@ func (s *server) handleAgentInstallCommand(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *server) handleInstallScript(w http.ResponseWriter, _ *http.Request) {
-    w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
-    _, _ = w.Write([]byte(installScript))
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	_, _ = w.Write([]byte(installScript))
+}
+
+func (s *server) noCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {

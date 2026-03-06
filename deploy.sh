@@ -91,7 +91,6 @@ install_go() {
 
   tmp_dir="$(mktemp -d)"
   go_tgz_url="https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz"
-
   echo "Installing Go ${GO_VERSION} (${arch})..."
   curl -fL -s "${go_tgz_url}" -o "${tmp_dir}/go.tgz"
   rm -rf "${GO_INSTALL_DIR}/go"
@@ -174,7 +173,7 @@ WantedBy=multi-user.target
 EOF
 }
 
-main() {
+install_panel() {
   need_root
   ensure_base_tools
   ensure_go
@@ -185,10 +184,73 @@ main() {
   write_service
   systemctl daemon-reload
   systemctl enable --now "${APP_NAME}"
-
-  echo "Deploy completed."
+  echo "Installed."
   echo "Panel URL: ${PANEL_PUBLIC_URL}"
-  echo "Service status: systemctl status ${APP_NAME} --no-pager"
 }
 
-main "$@"
+update_panel() {
+  need_root
+  ensure_base_tools
+  ensure_go
+  download_source
+  build_panel
+  write_env
+  write_service
+  systemctl daemon-reload
+  systemctl restart "${APP_NAME}"
+  echo "Updated."
+  echo "Panel URL: ${PANEL_PUBLIC_URL}"
+}
+
+uninstall_panel() {
+  need_root
+  systemctl disable --now "${APP_NAME}" 2>/dev/null || true
+  rm -f "${SERVICE_PATH}" "${ENV_PATH}" "${BIN_PATH}"
+  rm -rf "${INSTALL_DIR}"
+  systemctl daemon-reload
+  echo "Uninstalled ${APP_NAME}."
+}
+
+status_panel() {
+  systemctl status "${APP_NAME}" --no-pager || true
+}
+
+logs_panel() {
+  journalctl -u "${APP_NAME}" -n 120 --no-pager || true
+}
+
+menu() {
+  while true; do
+    cat <<EOF
+
+=== Emby Panel Menu ===
+1) Install
+2) Update
+3) Uninstall
+4) Status
+5) Logs
+0) Exit
+EOF
+    read -rp "Select: " c
+    case "${c}" in
+      1) install_panel ;;
+      2) update_panel ;;
+      3) uninstall_panel ;;
+      4) status_panel ;;
+      5) logs_panel ;;
+      0) exit 0 ;;
+      *) echo "Invalid choice." ;;
+    esac
+  done
+}
+
+cmd="${1:-menu}"
+case "${cmd}" in
+  menu) menu ;;
+  install) install_panel ;;
+  update) update_panel ;;
+  uninstall) uninstall_panel ;;
+  status) status_panel ;;
+  logs) logs_panel ;;
+  *) echo "Usage: [menu|install|update|uninstall|status|logs]"; exit 1 ;;
+esac
