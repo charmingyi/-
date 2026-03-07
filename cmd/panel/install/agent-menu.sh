@@ -148,7 +148,7 @@ setup_tls() {
   cat > /etc/caddy/Caddyfile <<EOF
 {
     servers {
-        protocols h1 h2
+        protocols h1
     }
 }
 

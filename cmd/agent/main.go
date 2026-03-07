@@ -222,7 +222,7 @@ func syncCaddyRoutes(routes []routeCfg) error {
 	if err := os.MkdirAll(caddyDir, 0o755); err != nil {
 		return err
 	}
-	base := "{\n\tservers {\n\t\tprotocols h1 h2\n\t}\n}\n\n# emby relay managed\nimport " + filepath.ToSlash(filepath.Join(caddyDir, "*.caddy")) + "\n"
+	base := "{\n\tservers {\n\t\tprotocols h1\n\t}\n}\n\n# emby relay managed\nimport " + filepath.ToSlash(filepath.Join(caddyDir, "*.caddy")) + "\n"
 	if err := os.WriteFile(caddyMain, []byte(base), 0o644); err != nil {
 		return err
 	}
