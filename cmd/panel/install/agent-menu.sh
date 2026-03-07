@@ -146,6 +146,12 @@ setup_tls() {
   mkdir -p /etc/caddy/emby-relay
 
   cat > /etc/caddy/Caddyfile <<EOF
+{
+    servers {
+        protocols h1 h2
+    }
+}
+
 # emby relay managed
 import /etc/caddy/emby-relay/*.caddy
 EOF
