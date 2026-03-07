@@ -305,10 +305,21 @@ func caddyTransportBlock(rc routeCfg) string {
 	if mode == "" && rc.InsecureTLS {
 		mode = "insecure"
 	}
-	if mode != "insecure" {
+	up, err := url.Parse(strings.TrimSpace(rc.UpstreamURL))
+	if err != nil || up.Hostname() == "" {
 		return ""
 	}
-	return "        transport http {\n            tls_insecure_skip_verify\n        }\n"
+	var sb strings.Builder
+	sb.WriteString("        transport http {\n")
+	sb.WriteString("            tls_server_name ")
+	sb.WriteString(up.Hostname())
+	sb.WriteString("\n")
+	if mode == "insecure" {
+		sb.WriteString("            tls_insecure_skip_verify\n")
+	}
+	sb.WriteString("            versions h1_1 h2\n")
+	sb.WriteString("        }\n")
+	return sb.String()
 }
 
 func normalizePrefix(v string) string {
