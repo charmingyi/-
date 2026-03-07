@@ -253,6 +253,9 @@ func shouldPrefixDomainPath(basePath, reqPath string) bool {
 	if basePath == "" || basePath == "/" {
 		return false
 	}
+	if reqPath == basePath || strings.HasPrefix(reqPath, basePath+"/") {
+		return false
+	}
 	if reqPath == "" || reqPath == "/" {
 		return true
 	}
