@@ -175,7 +175,9 @@ func syncConfig(panelURL, agentID, token string, s *routerState) error {
 			original(req)
 			req.Host = upCopy.Host
 			if domainCopy != "" {
-				req.URL.Path = joinPath(upCopy.Path, req.URL.Path)
+				if shouldPrefixDomainPath(upCopy.Path, req.URL.Path) {
+					req.URL.Path = joinPath(upCopy.Path, req.URL.Path)
+				}
 				return
 			}
 			req.URL.Path = joinPath(upCopy.Path, stripPrefix(req.URL.Path, prefixCopy))
@@ -230,15 +232,63 @@ func stripPrefix(path, prefix string) string {
 }
 
 func joinPath(basePath, incoming string) string {
-    b := strings.TrimRight(basePath, "/")
-    i := strings.TrimLeft(incoming, "/")
-    if b == "" {
-        return "/" + i
+	b := strings.TrimRight(basePath, "/")
+	i := strings.TrimLeft(incoming, "/")
+	if b == "" {
+		return "/" + i
     }
     if i == "" {
         return b
-    }
-    return b + "/" + i
+	}
+	return b + "/" + i
+}
+
+func shouldPrefixDomainPath(basePath, reqPath string) bool {
+	basePath = strings.TrimRight(strings.TrimSpace(basePath), "/")
+	reqPath = strings.TrimSpace(reqPath)
+	if basePath == "" || basePath == "/" {
+		return false
+	}
+	if reqPath == "" || reqPath == "/" {
+		return true
+	}
+	if basePath != "/web" {
+		return true
+	}
+
+	webPrefixes := []string{
+		"/web/",
+		"/apploader.js",
+		"/manifest.json",
+		"/favicon.ico",
+		"/robots.txt",
+		"/serviceworker.js",
+		"/service-worker.js",
+		"/sw.js",
+		"/images/",
+		"/modules/",
+		"/components/",
+		"/assets/",
+		"/node_modules/",
+		"/libraries/",
+		"/css/",
+		"/scripts/",
+		"/themes/",
+	}
+	for _, prefix := range webPrefixes {
+		if strings.HasPrefix(reqPath, prefix) {
+			return true
+		}
+	}
+
+	webExts := []string{".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".gif", ".ico", ".webp", ".woff", ".woff2", ".ttf", ".map", ".json", ".html"}
+	for _, ext := range webExts {
+		if strings.HasSuffix(reqPath, ext) {
+			return true
+		}
+	}
+
+	return false
 }
 
 type statusErr struct {
