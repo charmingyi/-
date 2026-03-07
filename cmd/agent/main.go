@@ -1,21 +1,24 @@
 package main
 
 import (
-	"crypto/x509"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-    "os"
-    "sort"
-    "strings"
-    "sync"
-    "time"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
 )
 
 type routeCfg struct {
@@ -42,21 +45,21 @@ type routeProxy struct {
 }
 
 type routerState struct {
-    mu     sync.RWMutex
-    routes []routeProxy
+	mu     sync.RWMutex
+	routes []routeProxy
 }
 
 func main() {
-    panelURL := env("PANEL_URL", "")
-    agentID := env("AGENT_ID", "")
-    token := env("AGENT_TOKEN", "")
-    listen := env("LISTEN_ADDR", ":19073")
-    syncInterval := envDuration("SYNC_INTERVAL", 30*time.Second)
+	panelURL := env("PANEL_URL", "")
+	agentID := env("AGENT_ID", "")
+	token := env("AGENT_TOKEN", "")
+	listen := env("LISTEN_ADDR", ":19073")
+	syncInterval := envDuration("SYNC_INTERVAL", 30*time.Second)
 
-    if panelURL == "" || agentID == "" || token == "" {
-        log.Fatal("missing PANEL_URL / AGENT_ID / AGENT_TOKEN")
-    }
-    panelURL = strings.TrimRight(panelURL, "/")
+	if panelURL == "" || agentID == "" || token == "" {
+		log.Fatal("missing PANEL_URL / AGENT_ID / AGENT_TOKEN")
+	}
+	panelURL = strings.TrimRight(panelURL, "/")
 
 	state := &routerState{}
 	if err := syncConfig(panelURL, agentID, token, state); err != nil {
@@ -77,14 +80,14 @@ func main() {
 		}
 	}()
 
-    mux := http.NewServeMux()
-    mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
-    mux.HandleFunc("/", state.handleProxy)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("/", state.handleProxy)
 
-    log.Printf("agent %s listening on %s", agentID, listen)
-    if err := http.ListenAndServe(listen, logReq(mux)); err != nil {
-        log.Fatal(err)
-    }
+	log.Printf("agent %s listening on %s", agentID, listen)
+	if err := http.ListenAndServe(listen, logReq(mux)); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func (s *routerState) handleProxy(w http.ResponseWriter, r *http.Request) {
@@ -116,32 +119,39 @@ func (s *routerState) match(host, path string) *routeProxy {
 }
 
 func syncConfig(panelURL, agentID, token string, s *routerState) error {
-    endpoint := panelURL + "/api/agent/config?agent_id=" + url.QueryEscape(agentID) + "&token=" + url.QueryEscape(token)
-    req, _ := http.NewRequest(http.MethodGet, endpoint, nil)
+	endpoint := panelURL + "/api/agent/config?agent_id=" + url.QueryEscape(agentID) + "&token=" + url.QueryEscape(token)
+	req, _ := http.NewRequest(http.MethodGet, endpoint, nil)
 
-    resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-    if err != nil {
-        return err
-    }
-    defer resp.Body.Close()
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
 
-    if resp.StatusCode != http.StatusOK {
-        b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-        return &statusErr{StatusCode: resp.StatusCode, Body: string(b)}
-    }
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return &statusErr{StatusCode: resp.StatusCode, Body: string(b)}
+	}
 
-    var c configResp
-    if err := json.NewDecoder(resp.Body).Decode(&c); err != nil {
-        return err
-    }
+	var c configResp
+	if err := json.NewDecoder(resp.Body).Decode(&c); err != nil {
+		return err
+	}
 
-    routes := make([]routeProxy, 0, len(c.Routes))
-    for _, rc := range c.Routes {
-        up, err := url.Parse(rc.UpstreamURL)
-        if err != nil || up.Scheme == "" || up.Host == "" {
-            log.Printf("skip invalid upstream %q: %v", rc.UpstreamURL, err)
-            continue
-        }
+	if err := syncCaddyRoutes(c.Routes); err != nil {
+		log.Printf("sync caddy failed: %v", err)
+	}
+
+	routes := make([]routeProxy, 0, len(c.Routes))
+	for _, rc := range c.Routes {
+		if strings.TrimSpace(rc.Domain) != "" {
+			continue
+		}
+		up, err := url.Parse(rc.UpstreamURL)
+		if err != nil || up.Scheme == "" || up.Host == "" {
+			log.Printf("skip invalid upstream %q: %v", rc.UpstreamURL, err)
+			continue
+		}
 
 		upCopy := *up
 		prefixCopy := normalizePrefix(rc.PathPrefix)
@@ -190,14 +200,115 @@ func syncConfig(panelURL, agentID, token string, s *routerState) error {
 		routes = append(routes, routeProxy{Domain: domainCopy, PathPrefix: prefixCopy, Upstream: &upCopy, Proxy: proxy})
 	}
 
-    sort.Slice(routes, func(i, j int) bool { return len(routes[i].PathPrefix) > len(routes[j].PathPrefix) })
+	sort.Slice(routes, func(i, j int) bool { return len(routes[i].PathPrefix) > len(routes[j].PathPrefix) })
 
-    s.mu.Lock()
-    s.routes = routes
-    s.mu.Unlock()
+	s.mu.Lock()
+	s.routes = routes
+	s.mu.Unlock()
 
-    log.Printf("synced routes: %d", len(routes))
-    return nil
+	log.Printf("synced routes: %d", len(c.Routes))
+	return nil
+}
+
+func syncCaddyRoutes(routes []routeCfg) error {
+	if _, err := exec.LookPath("caddy"); err != nil {
+		return nil
+	}
+	const (
+		caddyMain = "/etc/caddy/Caddyfile"
+		caddyDir  = "/etc/caddy/emby-relay"
+		caddyFile = "/etc/caddy/emby-relay/routes.caddy"
+	)
+	if err := os.MkdirAll(caddyDir, 0o755); err != nil {
+		return err
+	}
+	base := "# emby relay managed\nimport " + filepath.ToSlash(filepath.Join(caddyDir, "*.caddy")) + "\n"
+	if err := os.WriteFile(caddyMain, []byte(base), 0o644); err != nil {
+		return err
+	}
+
+	var blocks []string
+	for _, rc := range routes {
+		if strings.TrimSpace(rc.Domain) == "" {
+			continue
+		}
+		block, err := caddySiteBlock(rc)
+		if err != nil {
+			log.Printf("skip caddy route %s: %v", rc.RouteID, err)
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	content := strings.Join(blocks, "\n\n")
+	if content == "" {
+		content = "# no domain routes\n"
+	}
+	if err := os.WriteFile(caddyFile, []byte(content), 0o644); err != nil {
+		return err
+	}
+	if out, err := exec.Command("caddy", "reload", "--config", caddyMain).CombinedOutput(); err != nil {
+		return fmt.Errorf("caddy reload: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func caddySiteBlock(rc routeCfg) (string, error) {
+	up, err := url.Parse(strings.TrimSpace(rc.UpstreamURL))
+	if err != nil || up.Scheme == "" || up.Host == "" {
+		return "", fmt.Errorf("invalid upstream url")
+	}
+	basePath := strings.TrimRight(strings.TrimSpace(up.Path), "/")
+	up.Path = ""
+	up.RawPath = ""
+	target := up.String()
+
+	var sb strings.Builder
+	sb.WriteString(rc.Domain)
+	sb.WriteString(" {\n")
+	sb.WriteString("    encode gzip\n")
+	sb.WriteString("    header Access-Control-Allow-Origin *\n")
+	if redirect := caddyRootRedirect(basePath); redirect != "" {
+		sb.WriteString("    @root path /\n")
+		sb.WriteString("    redir @root ")
+		sb.WriteString(redirect)
+		sb.WriteString(" 302\n")
+	}
+	sb.WriteString("    reverse_proxy ")
+	sb.WriteString(target)
+	sb.WriteString(" {\n")
+	sb.WriteString("        header_up X-Real-IP {remote_host}\n")
+	sb.WriteString("        header_up X-Forwarded-For {remote_host}\n")
+	sb.WriteString("        header_up X-Forwarded-Proto {scheme}\n")
+	sb.WriteString("        header_up X-Forwarded-Host {host}\n")
+	sb.WriteString("        header_up Host {upstream_hostport}\n")
+	if transport := caddyTransportBlock(rc); transport != "" {
+		sb.WriteString(transport)
+	}
+	sb.WriteString("    }\n")
+	sb.WriteString("}")
+	return sb.String(), nil
+}
+
+func caddyRootRedirect(basePath string) string {
+	switch strings.TrimRight(strings.TrimSpace(basePath), "/") {
+	case "/web":
+		return "/web/index.html"
+	case "/emby":
+		return "/emby/web/index.html"
+	default:
+		return ""
+	}
+}
+
+func caddyTransportBlock(rc routeCfg) string {
+	mode := strings.ToLower(strings.TrimSpace(rc.TLSMode))
+	if mode == "" && rc.InsecureTLS {
+		mode = "insecure"
+	}
+	if mode != "insecure" {
+		return ""
+	}
+	return "        transport http {\n            tls_insecure_skip_verify\n        }\n"
 }
 
 func normalizePrefix(v string) string {

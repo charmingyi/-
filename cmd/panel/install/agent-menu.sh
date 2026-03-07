@@ -10,8 +10,6 @@ PANEL_URL="${PANEL_URL:-}"
 AGENT_ID="${AGENT_ID:-}"
 AGENT_TOKEN="${AGENT_TOKEN:-}"
 LISTEN_ADDR="${LISTEN_ADDR:-:19073}"
-TLS_DOMAIN="${TLS_DOMAIN:-}"
-
 need_root() {
   if [ "${EUID}" -ne 0 ]; then
     echo "Please run with sudo/root"
@@ -137,16 +135,6 @@ install_pkg() {
 
 setup_tls() {
   need_root
-  local domain
-  domain="${TLS_DOMAIN}"
-  if [ -z "$domain" ]; then
-    read -r -p "Domain (must resolve to this server): " domain < /dev/tty
-  fi
-  if [ -z "$domain" ]; then
-    echo "Domain is required"
-    return 1
-  fi
-
   if ! command -v caddy >/dev/null 2>&1; then
     install_pkg caddy || true
   fi
@@ -155,15 +143,16 @@ setup_tls() {
     return 1
   fi
 
+  mkdir -p /etc/caddy/emby-relay
+
   cat > /etc/caddy/Caddyfile <<EOF
-${domain} {
-  reverse_proxy 127.0.0.1${LISTEN_ADDR}
-}
+# emby relay managed
+import /etc/caddy/emby-relay/*.caddy
 EOF
 
   systemctl enable --now caddy
   systemctl restart caddy
-  echo "TLS enabled for https://${domain}"
+  echo "Caddy managed mode enabled. Domain sites will be created from panel bindings."
 }
 
 menu() {
@@ -182,7 +171,7 @@ menu() {
 3) Uninstall
 4) Status
 5) Logs
-6) Setup TLS (Caddy + Auto Cert)
+6) Setup Caddy Managed TLS
 0) Exit
 EOF
     read -r -p "Select: " c < "$input_dev" || exit 0

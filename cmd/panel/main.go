@@ -312,14 +312,20 @@ func (s *server) handleRouteVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targetURL := "http://" + normalizeUpstreamHost(ag.Host) + ":19073/"
+	client := &http.Client{Timeout: 10 * time.Second}
 	if rt.Domain == "" {
 		targetURL = "http://" + normalizeUpstreamHost(ag.Host) + ":19073" + rt.PathPrefix
+	} else {
+		targetURL = "https://" + rt.Domain + "/"
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
 	}
 	req, _ := http.NewRequest(http.MethodGet, targetURL, nil)
-	if rt.Domain != "" {
+	if rt.Domain != "" && strings.HasPrefix(targetURL, "http://") {
 		req.Host = rt.Domain
 	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "status": 0, "error": err.Error()})
 		return
