@@ -175,6 +175,10 @@ func syncConfig(panelURL, agentID, token string, s *routerState) error {
 			original(req)
 			req.Host = upCopy.Host
 			if domainCopy != "" {
+				if rewrite := domainRootRewrite(upCopy.Path, req.URL.Path); rewrite != "" {
+					req.URL.Path = rewrite
+					return
+				}
 				if shouldPrefixDomainPath(upCopy.Path, req.URL.Path) {
 					req.URL.Path = joinPath(upCopy.Path, req.URL.Path)
 				}
@@ -289,6 +293,20 @@ func shouldPrefixDomainPath(basePath, reqPath string) bool {
 	}
 
 	return false
+}
+
+func domainRootRewrite(basePath, reqPath string) string {
+	basePath = strings.TrimRight(strings.TrimSpace(basePath), "/")
+	reqPath = strings.TrimSpace(reqPath)
+	if reqPath != "" && reqPath != "/" {
+		return ""
+	}
+	switch basePath {
+	case "/web":
+		return "/web/index.html"
+	default:
+		return ""
+	}
 }
 
 type statusErr struct {
