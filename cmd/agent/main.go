@@ -261,7 +261,7 @@ func syncNginxRoutes(routes []routeCfg) error {
 }
 
 func nginxConfig(routes []routeCfg) (string, []routeCfg, error) {
-	preamble := "map $http_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n\n"
+	preamble := "map $http_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n\nmap $request_method $emby_proxy_method {\n    default $request_method;\n    HEAD GET;\n}\n\n"
 	if len(routes) == 0 {
 		return preamble + "# no domain routes\n", nil, nil
 	}
@@ -366,6 +366,8 @@ func nginxProxyLocation(target string, up *url.URL, rc routeCfg, indent string) 
 	sb.WriteString("    proxy_pass ")
 	sb.WriteString(target)
 	sb.WriteString(";\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_method $emby_proxy_method;\n")
 	sb.WriteString(indent)
 	sb.WriteString("    proxy_http_version 1.1;\n")
 	sb.WriteString(indent)
