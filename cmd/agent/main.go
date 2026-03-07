@@ -279,7 +279,7 @@ func caddySiteBlock(rc routeCfg) (string, error) {
 	sb.WriteString("        header_up X-Real-IP {remote_host}\n")
 	sb.WriteString("        header_up X-Forwarded-For {remote_host}\n")
 	sb.WriteString("        header_up X-Forwarded-Proto {scheme}\n")
-	sb.WriteString("        header_up X-Forwarded-Host {host}\n")
+	sb.WriteString("        header_up -X-Forwarded-Host\n")
 	sb.WriteString("        header_up Host {upstream_host}\n")
 	if transport := caddyTransportBlock(rc); transport != "" {
 		sb.WriteString(transport)
