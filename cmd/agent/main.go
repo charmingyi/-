@@ -317,7 +317,7 @@ func caddyTransportBlock(rc routeCfg) string {
 	if mode == "insecure" {
 		sb.WriteString("            tls_insecure_skip_verify\n")
 	}
-	sb.WriteString("            versions h1_1 h2\n")
+	sb.WriteString("            versions 1.1\n")
 	sb.WriteString("        }\n")
 	return sb.String()
 }
