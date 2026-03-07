@@ -135,30 +135,31 @@ install_pkg() {
 
 setup_tls() {
   need_root
-  if ! command -v caddy >/dev/null 2>&1; then
-    install_pkg caddy || true
+  if ! command -v nginx >/dev/null 2>&1; then
+    install_pkg nginx || true
   fi
-  if ! command -v caddy >/dev/null 2>&1; then
-    echo "caddy not found and auto install failed. Please install caddy manually."
+  if ! command -v certbot >/dev/null 2>&1; then
+    install_pkg certbot || true
+  fi
+  if ! command -v nginx >/dev/null 2>&1; then
+    echo "nginx not found and auto install failed. Please install nginx manually."
     return 1
   fi
 
-  mkdir -p /etc/caddy/emby-relay
+  mkdir -p /var/www/emby-relay/.well-known/acme-challenge
+  rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
 
-  cat > /etc/caddy/Caddyfile <<EOF
-{
-    servers {
-        protocols h1
-    }
+  cat > /etc/nginx/conf.d/emby-relay.conf <<EOF
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    '' close;
 }
-
-# emby relay managed
-import /etc/caddy/emby-relay/*.caddy
 EOF
 
-  systemctl enable --now caddy
-  systemctl restart caddy
-  echo "Caddy managed mode enabled. Domain sites will be created from panel bindings."
+  systemctl disable --now caddy 2>/dev/null || true
+  systemctl enable --now nginx
+  systemctl restart nginx
+  echo "Nginx managed mode enabled. Domain sites and certificates will be created from panel bindings."
 }
 
 menu() {
@@ -177,7 +178,7 @@ menu() {
 3) Uninstall
 4) Status
 5) Logs
-6) Setup Caddy Managed TLS
+6) Setup Nginx Managed TLS
 0) Exit
 EOF
     read -r -p "Select: " c < "$input_dev" || exit 0

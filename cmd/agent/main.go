@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -138,8 +137,8 @@ func syncConfig(panelURL, agentID, token string, s *routerState) error {
 		return err
 	}
 
-	if err := syncCaddyRoutes(c.Routes); err != nil {
-		log.Printf("sync caddy failed: %v", err)
+	if err := syncNginxRoutes(c.Routes); err != nil {
+		log.Printf("sync nginx failed: %v", err)
 	}
 
 	routes := make([]routeProxy, 0, len(c.Routes))
@@ -210,85 +209,141 @@ func syncConfig(panelURL, agentID, token string, s *routerState) error {
 	return nil
 }
 
-func syncCaddyRoutes(routes []routeCfg) error {
-	if _, err := exec.LookPath("caddy"); err != nil {
+func syncNginxRoutes(routes []routeCfg) error {
+	if _, err := exec.LookPath("nginx"); err != nil {
 		return nil
 	}
 	const (
-		caddyMain = "/etc/caddy/Caddyfile"
-		caddyDir  = "/etc/caddy/emby-relay"
-		caddyFile = "/etc/caddy/emby-relay/routes.caddy"
+		webrootDir = "/var/www/emby-relay"
+		nginxConf  = "/etc/nginx/conf.d/emby-relay.conf"
 	)
-	if err := os.MkdirAll(caddyDir, 0o755); err != nil {
-		return err
-	}
-	base := "{\n\tservers {\n\t\tprotocols h1\n\t}\n}\n\n# emby relay managed\nimport " + filepath.ToSlash(filepath.Join(caddyDir, "*.caddy")) + "\n"
-	if err := os.WriteFile(caddyMain, []byte(base), 0o644); err != nil {
+	if err := os.MkdirAll(filepathJoin(webrootDir, ".well-known", "acme-challenge"), 0o755); err != nil {
 		return err
 	}
 
-	var blocks []string
+	domainRoutes := make([]routeCfg, 0, len(routes))
 	for _, rc := range routes {
-		if strings.TrimSpace(rc.Domain) == "" {
-			continue
+		if strings.TrimSpace(rc.Domain) != "" {
+			domainRoutes = append(domainRoutes, rc)
 		}
-		block, err := caddySiteBlock(rc)
-		if err != nil {
-			log.Printf("skip caddy route %s: %v", rc.RouteID, err)
-			continue
-		}
-		blocks = append(blocks, block)
 	}
-	content := strings.Join(blocks, "\n\n")
-	if content == "" {
-		content = "# no domain routes\n"
-	}
-	if err := os.WriteFile(caddyFile, []byte(content), 0o644); err != nil {
+
+	content, missing, err := nginxConfig(domainRoutes)
+	if err != nil {
 		return err
 	}
-	if out, err := exec.Command("caddy", "reload", "--config", caddyMain).CombinedOutput(); err != nil {
-		return fmt.Errorf("caddy reload: %v: %s", err, strings.TrimSpace(string(out)))
+	if err := os.WriteFile(nginxConf, []byte(content), 0o644); err != nil {
+		return err
+	}
+	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
+		return fmt.Errorf("nginx -t: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("systemctl", "reload", "nginx").CombinedOutput(); err != nil {
+		return fmt.Errorf("nginx reload: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	if ensureACMECerts(missing, webrootDir) {
+		content, _, err = nginxConfig(domainRoutes)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(nginxConf, []byte(content), 0o644); err != nil {
+			return err
+		}
+		if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
+			return fmt.Errorf("nginx -t after certbot: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		if out, err := exec.Command("systemctl", "reload", "nginx").CombinedOutput(); err != nil {
+			return fmt.Errorf("nginx reload after certbot: %v: %s", err, strings.TrimSpace(string(out)))
+		}
 	}
 	return nil
 }
 
-func caddySiteBlock(rc routeCfg) (string, error) {
-	up, err := url.Parse(strings.TrimSpace(rc.UpstreamURL))
-	if err != nil || up.Scheme == "" || up.Host == "" {
-		return "", fmt.Errorf("invalid upstream url")
+func nginxConfig(routes []routeCfg) (string, []routeCfg, error) {
+	preamble := "map $http_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n\n"
+	if len(routes) == 0 {
+		return preamble + "# no domain routes\n", nil, nil
 	}
-	basePath := strings.TrimRight(strings.TrimSpace(up.Path), "/")
-	up.Path = ""
-	up.RawPath = ""
-	target := up.String()
-
-	var sb strings.Builder
-	sb.WriteString(rc.Domain)
-	sb.WriteString(" {\n")
-	sb.WriteString("    encode gzip\n")
-	sb.WriteString("    header Access-Control-Allow-Origin *\n")
-	if redirect := caddyRootRedirect(basePath); redirect != "" {
-		sb.WriteString("    @root path /\n")
-		sb.WriteString("    redir @root ")
-		sb.WriteString(redirect)
-		sb.WriteString(" 302\n")
+	var blocks []string
+	var missing []routeCfg
+	for _, rc := range routes {
+		block, hasCert, err := nginxServerBlock(rc)
+		if err != nil {
+			log.Printf("skip nginx route %s: %v", rc.RouteID, err)
+			continue
+		}
+		blocks = append(blocks, block)
+		if !hasCert {
+			missing = append(missing, rc)
+		}
 	}
-	sb.WriteString("    reverse_proxy ")
-	sb.WriteString(target)
-	sb.WriteString(" {\n")
-	sb.WriteString("        header_up X-Real-IP {remote_host}\n")
-	sb.WriteString("        header_up X-Forwarded-For {remote_host}\n")
-	sb.WriteString("        header_up X-Forwarded-Proto {scheme}\n")
-	sb.WriteString("        header_up Host {upstream_hostport}\n")
-	if transport := caddyTransportBlock(rc); transport != "" {
-		sb.WriteString(transport)
+	if len(blocks) == 0 {
+		return preamble + "# no domain routes\n", missing, nil
 	}
-	sb.WriteString("    }\n")
-	sb.WriteString("}")
-	return sb.String(), nil
+	return preamble + strings.Join(blocks, "\n\n"), missing, nil
 }
 
-func caddyRootRedirect(basePath string) string {
+func nginxServerBlock(rc routeCfg) (string, bool, error) {
+	up, err := url.Parse(strings.TrimSpace(rc.UpstreamURL))
+	if err != nil || up.Scheme == "" || up.Host == "" {
+		return "", false, fmt.Errorf("invalid upstream url")
+	}
+	basePath := strings.TrimRight(strings.TrimSpace(up.Path), "/")
+	target := up.Scheme + "://" + up.Host
+	domain := strings.TrimSpace(rc.Domain)
+	fullchain, privkey, hasCert := nginxCertFiles(domain)
+
+	var sb strings.Builder
+	sb.WriteString("server {\n")
+	sb.WriteString("    listen 80;\n")
+	sb.WriteString("    server_name ")
+	sb.WriteString(domain)
+	sb.WriteString(";\n")
+	sb.WriteString("    location ^~ /.well-known/acme-challenge/ {\n")
+	sb.WriteString("        root /var/www/emby-relay;\n")
+	sb.WriteString("    }\n")
+	if redirect := nginxRootRedirect(basePath); redirect != "" {
+		sb.WriteString("    location = / {\n")
+		sb.WriteString("        return 302 ")
+		sb.WriteString(redirect)
+		sb.WriteString(";\n")
+		sb.WriteString("    }\n")
+	}
+	sb.WriteString(nginxProxyLocation(target, up, rc, "    "))
+	sb.WriteString("}\n")
+
+	if hasCert {
+		sb.WriteString("\nserver {\n")
+		sb.WriteString("    listen 443 ssl;\n")
+		sb.WriteString("    server_name ")
+		sb.WriteString(domain)
+		sb.WriteString(";\n")
+		sb.WriteString("    ssl_certificate ")
+		sb.WriteString(fullchain)
+		sb.WriteString(";\n")
+		sb.WriteString("    ssl_certificate_key ")
+		sb.WriteString(privkey)
+		sb.WriteString(";\n")
+		sb.WriteString("    ssl_protocols TLSv1.2 TLSv1.3;\n")
+		sb.WriteString("    location ^~ /.well-known/acme-challenge/ {\n")
+		sb.WriteString("        root /var/www/emby-relay;\n")
+		sb.WriteString("    }\n")
+		if redirect := nginxRootRedirect(basePath); redirect != "" {
+			sb.WriteString("    location = / {\n")
+			sb.WriteString("        return 302 ")
+			sb.WriteString(redirect)
+			sb.WriteString(";\n")
+			sb.WriteString("    }\n")
+		}
+		sb.WriteString(nginxProxyLocation(target, up, rc, "    "))
+		sb.WriteString("}")
+	}
+
+	return sb.String(), hasCert, nil
+}
+
+func nginxRootRedirect(basePath string) string {
 	switch strings.TrimRight(strings.TrimSpace(basePath), "/") {
 	case "/web":
 		return "/web/index.html"
@@ -299,26 +354,104 @@ func caddyRootRedirect(basePath string) string {
 	}
 }
 
-func caddyTransportBlock(rc routeCfg) string {
+func nginxProxyLocation(target string, up *url.URL, rc routeCfg, indent string) string {
 	mode := strings.ToLower(strings.TrimSpace(rc.TLSMode))
 	if mode == "" && rc.InsecureTLS {
 		mode = "insecure"
 	}
-	up, err := url.Parse(strings.TrimSpace(rc.UpstreamURL))
-	if err != nil || up.Hostname() == "" {
-		return ""
-	}
 	var sb strings.Builder
-	sb.WriteString("        transport http {\n")
-	sb.WriteString("            tls_server_name ")
+	sb.WriteString(indent)
+	sb.WriteString("location / {\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_pass ")
+	sb.WriteString(target)
+	sb.WriteString(";\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_http_version 1.1;\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_set_header Host ")
+	sb.WriteString(up.Host)
+	sb.WriteString(";\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_set_header X-Real-IP $remote_addr;\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_set_header X-Forwarded-Proto $scheme;\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_set_header Upgrade $http_upgrade;\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_set_header Connection $connection_upgrade;\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_ssl_server_name on;\n")
+	sb.WriteString(indent)
+	sb.WriteString("    proxy_ssl_name ")
 	sb.WriteString(up.Hostname())
-	sb.WriteString("\n")
+	sb.WriteString(";\n")
 	if mode == "insecure" {
-		sb.WriteString("            tls_insecure_skip_verify\n")
+		sb.WriteString(indent)
+		sb.WriteString("    proxy_ssl_verify off;\n")
 	}
-	sb.WriteString("            versions 1.1\n")
-	sb.WriteString("        }\n")
+	sb.WriteString(indent)
+	sb.WriteString("}\n")
 	return sb.String()
+}
+
+func nginxCertFiles(domain string) (string, string, bool) {
+	base := "/etc/letsencrypt/live/" + domain
+	fullchain := filepathJoin(base, "fullchain.pem")
+	privkey := filepathJoin(base, "privkey.pem")
+	if fileExists(fullchain) && fileExists(privkey) {
+		return fullchain, privkey, true
+	}
+	return fullchain, privkey, false
+}
+
+func ensureACMECerts(routes []routeCfg, webroot string) bool {
+	if len(routes) == 0 {
+		return false
+	}
+	if _, err := exec.LookPath("certbot"); err != nil {
+		return false
+	}
+	changed := false
+	for _, rc := range routes {
+		domain := strings.TrimSpace(rc.Domain)
+		if domain == "" {
+			continue
+		}
+		_, _, hasCert := nginxCertFiles(domain)
+		if hasCert {
+			continue
+		}
+		args := []string{
+			"certonly",
+			"--webroot",
+			"-w", webroot,
+			"-d", domain,
+			"--non-interactive",
+			"--agree-tos",
+			"--register-unsafely-without-email",
+			"--keep-until-expiring",
+		}
+		if out, err := exec.Command("certbot", args...).CombinedOutput(); err != nil {
+			log.Printf("certbot failed for %s: %v: %s", domain, err, strings.TrimSpace(string(out)))
+			continue
+		}
+		changed = true
+	}
+	return changed
+}
+
+func filepathJoin(parts ...string) string {
+	return strings.ReplaceAll(strings.Join(parts, "/"), "//", "/")
+}
+
+func fileExists(p string) bool {
+	if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		return true
+	}
+	return false
 }
 
 func normalizePrefix(v string) string {
